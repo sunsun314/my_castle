@@ -7,7 +7,14 @@ import { ENEMY_TYPES } from '../../config/enemies';
  *
  * 数值 / 配色 / 行为标识 / 攻击块来自 `config/enemies.js` 的 `ENEMY_TYPES`
  * （按 opts.type 选择，缺省 'patrol'）。行为在 update 里按 `behavior` 分派：
- *   patrol / flyer / charger / shooter / jumper / ceiling / diver
+ *   patrol / flyer / charger / shooter / jumper / ceiling / diver / emitter / boss
+ *
+ * 'emitter'（离体攻击发射者）：进入射程 -> 前摇 -> 外放 attack.emit 定义的弹体/伤害区 -> 后摇。
+ * 具体形态在 config/enemyAttacks.js 注册表里（吐火 flame / 风刃 windblade / 火球 fireball …）。
+ *
+ * 'boss'（多阶段 BOSS）：血量跌破阈值 -> 短暂无敌咆哮（阶段切换）-> 换用该阶段的招式表 /
+ * 弱点 / 配色继续战斗。招式表循环出招，每招仍是四段状态机，kind 决定生效效果：
+ *   lunge 冲撞 / emit 外放离体攻击 / slam 起跳砸地放冲击波。见 config/enemies.js 的 phases。
  *
  * 攻击机制与怪物**强绑定**：每个类型用同一个四段状态机
  *   idle → windup(前摇) → active(生效) → recovery(后摇)
@@ -72,6 +79,28 @@ export default class Enemy extends Entity {
     this._anchored = false; // ceiling：是否已吸附到天花板
     this.aimX = 0;          // diver：俯冲方向
     this.aimY = 0;
+    this._emitTimer = 0;    // emitter：连续喷射（interval>0）的节拍
+    this._emitted = false;  // emitter：单发（volley）是否已发射
+
+    // ---- BOSS：多阶段 ----
+    this.heavy = !!type.heavy;   // 受击不位移 / 不硬直
+    this.invuln = 0;             // 无敌剩余时间（阶段切换时）
+    this.phases = type.phases || null;
+    this.phaseIndex = 0;
+    this.phaseTransition = 0;    // >0 表示正在切换阶段（咆哮）
+    this.nextPhase = 0;
+    this.moveIndex = 0;          // 当前阶段招式游标
+    this._slamming = false;      // slam：是否处于起跳->落地窗口
+    if (this.phases && this.phases.length) {
+      if (this.phases.length < 2) {
+        // 兜底：BOSS 至少两阶段（复制首段并设 50% 阈值）
+        this.phases = [this.phases[0], Object.assign({ at: 0.5 }, this.phases[0])];
+      }
+      const mv0 = (this.phases[0].moves && this.phases[0].moves[0]) || { kind: 'none' };
+      this.attack = mv0;
+      this.attackKind = mv0.kind;
+      if (this.phases[0].weaknesses) this.weaknesses = this.phases[0].weaknesses;
+    }
 
     // 飞行类：抬升到地面之上，并记录悬浮中心
     if (type.spawnLift) this.y -= type.spawnLift;
@@ -89,6 +118,7 @@ export default class Enemy extends Entity {
 
     if (this.flash > 0) this.flash -= dt;
     if (this.slowTimer > 0) this.slowTimer -= dt;
+    if (this.invuln > 0) this.invuln -= dt;
     if (this.attackCd > 0) this.attackCd -= dt;
     this.animT += dt;
 
@@ -121,6 +151,8 @@ export default class Enemy extends Entity {
       case 'jumper': this._updateJumper(dt, world, map); break;
       case 'ceiling': this._updateCeiling(dt, world, map); break;
       case 'diver': this._updateDiver(dt, world, map); break;
+      case 'emitter': this._updateEmitter(dt, world, map); break;
+      case 'boss': this._updateBoss(dt, world, map); break;
       default: this._updatePatrol(dt, map);
     }
   }
@@ -396,6 +428,217 @@ export default class Enemy extends Entity {
     }
   }
 
+  /**
+   * 离体攻击发射者：巡逻 -> 前摇 -> 外放 attack.emit（单发 / 连发 / 多发）-> 后摇。
+   * 形态与参数来自 attack 块 + config/enemyAttacks.js；机制与怪物强绑定。
+   *   interval > 0：生效期内每隔 interval 秒喷一次（吐火等持续型）
+   *   count/spread ：一次喷多发（风刃双发等）
+   */
+  _updateEmitter(dt, world, map) {
+    const a = this.attack;
+    const p = world.player;
+    const slow = this._slow();
+
+    if (this.attackState === 'idle') {
+      if (this.onGround && this._wouldFall(map)) this._turn();
+      this.vx = this.speed * this.dir * slow;
+      this.moveX(dt, map);
+      if (this.vx === 0) this._turn();
+      const inR = this._inRange(world);
+      this.facing = inR ? (p.cx >= this.cx ? 1 : -1) : this.dir;
+      if (this.onGround && this._canStart() && inR) this._beginWindup(world);
+    } else if (this.attackState === 'windup') {
+      this.vx = 0;
+      this.facing = p.cx >= this.cx ? 1 : -1; // 前摇期间持续瞄准
+      this.attackTimer -= dt;
+      if (this.attackTimer <= 0) {
+        this.attackState = 'active';
+        this.attackTimer = a.active != null ? a.active : 0.2;
+        this._emitTimer = 0; // 进入生效期立即喷第一发
+        this._emitted = false;
+      }
+    } else if (this.attackState === 'active') {
+      this.vx = 0;
+      this.attackTimer -= dt;
+      const interval = a.interval || 0;
+      if (interval > 0) {
+        this._emitTimer -= dt;
+        if (this._emitTimer <= 0) {
+          world.spawnEnemyAttack(this);
+          this._emitTimer = interval;
+        }
+      } else if (!this._emitted) {
+        world.spawnEnemyAttack(this);
+        this._emitted = true;
+      }
+      if (this.attackTimer <= 0) this._beginRecovery();
+    } else { // recovery
+      this.vx = 0;
+      this.attackTimer -= dt;
+      if (this.attackTimer <= 0) this._endAttack();
+    }
+
+    this._applyGravity(dt);
+    this.moveY(dt, map);
+  }
+
+  // ================= BOSS（多阶段）=================
+
+  /**
+   * 多阶段 BOSS 主循环：
+   *   1) 正在切换阶段 -> 咆哮（无敌、原地）
+   *   2) 血量跌破阈值 -> 进入下一阶段切换
+   *   3) 否则按当前阶段的招式表循环出招（每招四段状态机）
+   */
+  _updateBoss(dt, world, map) {
+    const p = world.player;
+
+    // 1) 阶段切换咆哮（全程无敌，不受击）
+    if (this.phaseTransition > 0) {
+      this.phaseTransition -= dt;
+      this.vx = 0;
+      this.invuln = Math.max(this.invuln, 0.05);
+      this._applyGravity(dt);
+      this.moveY(dt, map);
+      if (this.phaseTransition <= 0) {
+        this._applyPhase(this.nextPhase);
+        this.attackState = 'idle';
+        this.attackTimer = 0;
+        this.attackCd = 0.7;
+      }
+      return;
+    }
+
+    // 2) 血量跌破阈值 -> 触发阶段切换
+    const frac = this.maxHp > 0 ? this.hp / this.maxHp : 0;
+    const want = this._phaseFor(frac);
+    if (want > this.phaseIndex) { this._beginPhaseTransition(want); return; }
+
+    const mv = this.attack;
+    const slow = this._slow();
+
+    if (this.attackState === 'idle') {
+      // 朝玩家缓慢逼近；到悬崖边停住（不跳崖）
+      if (p && p.hp > 0) this.dir = p.cx >= this.cx ? 1 : -1;
+      const heldAtLedge = this.onGround && this._wouldFall(map);
+      this.facing = this.dir;
+      this.vx = heldAtLedge ? 0 : this.speed * this.dir * slow;
+      this.moveX(dt, map);
+      if (!heldAtLedge && this.vx === 0) this._turn();
+      if (this.onGround && this._canStart() && this._inRange(world)) this._beginWindup(world);
+    } else if (this.attackState === 'windup') {
+      this.vx = 0;
+      if (p) this.facing = p.cx >= this.cx ? 1 : -1; // 前摇持续瞄准
+      this.attackTimer -= dt;
+      if (this.attackTimer <= 0) {
+        this.attackState = 'active';
+        this.attackTimer = mv.active != null ? mv.active : 0.3;
+        this._emitTimer = 0;
+        this._emitted = false;
+        this._startMove(world, mv); // 生效瞬间效果（冲撞冲量 / 起跳 / 首发射击）
+      }
+    } else if (this.attackState === 'active') {
+      this._tickMove(dt, world, map, mv); // 生效期持续效果
+      this.attackTimer -= dt;
+      if (this.attackTimer <= 0) this._beginRecovery();
+    } else { // recovery
+      this.vx = 0;
+      this.attackTimer -= dt;
+      if (this.attackTimer <= 0) {
+        this._endAttack();
+        this.moveIndex += 1;                 // 循环下一招
+        this.attack = this._curMove();
+        this.attackKind = this.attack.kind;
+      }
+    }
+
+    this._applyGravity(dt);
+    this.moveY(dt, map);
+  }
+
+  /** 当前阶段该出的招（循环） */
+  _curMove() {
+    const ph = this.phases ? this.phases[this.phaseIndex] : null;
+    const moves = ph && ph.moves && ph.moves.length ? ph.moves : [{ kind: 'none' }];
+    return moves[this.moveIndex % moves.length];
+  }
+
+  /** 由血量比例求应处阶段（阈值 at：血量 <= at 即进入该阶段，取最深满足者） */
+  _phaseFor(frac) {
+    let idx = 0;
+    for (let i = 0; i < this.phases.length; i++) {
+      const at = this.phases[i].at != null ? this.phases[i].at : (i === 0 ? 1 : 0);
+      if (frac <= at) idx = i;
+    }
+    return idx;
+  }
+
+  /** 切换阶段：更新弱点 / 配色 / 速度，并重置招式游标 */
+  _applyPhase(i) {
+    this.phaseIndex = i;
+    const ph = this.phases[i] || {};
+    if (ph.weaknesses) this.weaknesses = ph.weaknesses;
+    if (ph.color) this.color = ph.color;
+    if (ph.speed != null) this.speed = ph.speed;
+    this.moveIndex = 0;
+    this.attack = this._curMove();
+    this.attackKind = this.attack.kind;
+  }
+
+  /** 进入阶段切换：短暂无敌咆哮（打断当前招） */
+  _beginPhaseTransition(want) {
+    this.nextPhase = want;
+    const ph = this.phases[want] || {};
+    const t = ph.transition != null ? ph.transition : 1.0;
+    this.phaseTransition = t;
+    this.invuln = Math.max(this.invuln, t + 0.15); // 切换全程无敌
+    this.attackState = 'idle';
+    this.attackTimer = 0;
+    this.attackCd = 0;
+    this.vx = 0;
+    this.flash = Math.max(this.flash, 0.25);
+  }
+
+  /** 招式生效瞬间：冲撞冲量 / 起跳 / 首发离体攻击 */
+  _startMove(world, mv) {
+    const p = world.player;
+    if (mv.kind === 'lunge') {
+      if (p) { this.dir = p.cx >= this.cx ? 1 : -1; this.facing = this.dir; }
+      this.vx = this.dir * (mv.dashSpeed != null ? mv.dashSpeed : 180);
+    } else if (mv.kind === 'slam') {
+      this.vy = -(mv.hopSpeedY != null ? mv.hopSpeedY : 220);
+      this.onGround = false;
+      this._slamming = true;
+    } else if (mv.kind === 'emit') {
+      world.spawnEnemyAttack(this, mv.emit, mv);
+      this._emitted = true;
+    }
+  }
+
+  /** 招式生效期持续效果（连喷 / 冲撞位移 / 落地放冲击波） */
+  _tickMove(dt, world, map, mv) {
+    if (mv.kind === 'emit') {
+      const interval = mv.interval || 0;
+      if (interval > 0) {
+        this._emitTimer -= dt;
+        if (this._emitTimer <= 0) {
+          world.spawnEnemyAttack(this, mv.emit, mv);
+          this._emitTimer = interval;
+        }
+      }
+    } else if (mv.kind === 'lunge') {
+      this.vx = this.dir * (mv.dashSpeed != null ? mv.dashSpeed : 180);
+      this.moveX(dt, map);
+      if (this.vx === 0) this.attackTimer = 0; // 撞墙提前结束
+    } else if (mv.kind === 'slam') {
+      if (this._slamming && this.onGround) {
+        world.spawnEnemyAttack(this, mv.emit || 'shockwave', mv); // 落地冲击波
+        this._slamming = false;
+        this.attackTimer = 0;
+      }
+    }
+  }
+
   // ================= 工具 =================
 
   _slow() {
@@ -459,8 +702,10 @@ export default class Enemy extends Entity {
    */
   hurt(dmg = 1, fromX = this.cx) {
     if (this.hp <= 0 || this.dead) return false;
+    if (this.invuln > 0) return false; // BOSS 阶段切换无敌：这一击无效
     this.hp -= dmg;
     this.flash = 0.12;
+    if (this.heavy) return true;       // 重型（BOSS）：不位移、不硬直，可反击
     this.hurtTimer = 0.15;
     const dir = fromX <= this.cx ? 1 : -1; // 从左边打来 -> 往右退
     this.vx = dir * this.knockback;
@@ -505,10 +750,12 @@ export default class Enemy extends Entity {
       const c = this.typeDef.colorCharge || '#fbbf24';
       renderer.drawRect(this.cx - 1, this.y - 5, 2, 4, c, this.attackState === 'active' ? 0.9 : 0.5);
     }
-    if (this.behavior === 'shooter') {
+    if (this.behavior === 'shooter' || this.behavior === 'emitter') {
+      const a = this.attack;
+      const mc = a.projColor || (a.emit === 'flame' ? '#ff8a3d' : (a.emit === 'windblade' ? '#7ee787' : '#67e8f9'));
       const mx = this.facing > 0 ? rx + this.w : rx - 3;
-      const mw = winding ? 4 : 3; // 蓄光时炮口变大
-      renderer.drawRect(mx, ry + 4, mw, 3, this.typeDef.attack.projColor || '#67e8f9');
+      const mw = winding ? 4 : 3; // 蓄力时炮口变大
+      renderer.drawRect(mx, ry + 4, mw, 3, mc);
     }
     if (this.behavior === 'ceiling' && winding) {
       // 下坠预警：正下方一段警示
@@ -519,6 +766,25 @@ export default class Enemy extends Entity {
       const len = Math.hypot(this.aimX, this.aimY) || 1;
       renderer.drawRect(this.cx + (this.aimX / len) * 8 - 1, this.cy + (this.aimY / len) * 8 - 1, 3, 3,
         this.typeDef.colorCharge || '#fecdd3');
+    }
+    if (this.behavior === 'boss') {
+      // 阶段切换：外扩预警环
+      if (this.phaseTransition > 0) {
+        const ph = this.phases[this.nextPhase] || {};
+        const total = ph.transition != null ? ph.transition : 1.0;
+        const t = 1 - Math.max(0, Math.min(1, this.phaseTransition / total));
+        renderer.drawCircle(this.cx, this.cy, this.w * (0.5 + t * 0.9), {
+          stroke: this.typeDef.colorCharge || '#f87171', alpha: 0.9 - t * 0.6, lineWidth: 2,
+        });
+      }
+      // 招式前摇提示：冲撞 / 砸地 / 发射
+      if (winding) {
+        const mv = this.attack;
+        const c = this.typeDef.colorCharge || '#fca5a5';
+        if (mv.kind === 'lunge') renderer.drawRect(this.cx - 1, this.y - 7, 2, 5, c);
+        else if (mv.kind === 'slam') renderer.drawRect(this.x, this.y + this.h + 1, this.w, 2, c);
+        else renderer.drawRect(this.facing > 0 ? rx + this.w : rx - 4, ry + this.h * 0.5 - 1, 4, 3, c);
+      }
     }
 
     // 掉血后显示小血条

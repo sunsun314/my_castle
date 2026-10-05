@@ -6,7 +6,8 @@ import { ENEMY_TYPES } from '../config/enemies';
 import Tilemap from './tilemap';
 import Player from './entities/player';
 import Enemy from './entities/enemy';
-import EnemyBolt from './entities/enemyBolt';
+import EnemyAttack from './entities/enemyAttack';
+import { enemyAttackDef } from '../config/enemyAttacks';
 import MagicBolt from './entities/projectile';
 import DamageText from './entities/damageText';
 import { applyWeakness } from './elements';
@@ -86,18 +87,42 @@ export default class World {
     this.projectiles.push(new MagicBolt(x, y, dir, player.stats.mag, info));
   }
 
-  /** 怪物远程弹（远程怪发射）：水平飞行、命中玩家/撞墙/超时回收 */
-  spawnEnemyBolt(enemy) {
-    const a = enemy.attack || {}; // 弹道参数与怪物强绑定（存在其 attack 块里）
+  /**
+   * 发射一次「离体攻击」（怪物外放的弹体 / 持续伤害区，统一进 enemyBolts）。
+   *   key  ：config/enemyAttacks.js 的形态 key；缺省用 enemy.attack.emit，再缺省 'bolt'
+   *   opts ：单发级覆盖（offset / count / spread / damage / speed …）
+   * 形态数据全部来自注册表，故新增/替换形态无需改这里。
+   */
+  spawnEnemyAttack(enemy, key, opts = {}) {
+    const a = enemy.attack || {}; // 离体攻击参数与怪物强绑定（存在其 attack 块里）
+    const emitKey = key || a.emit || 'bolt';
+    const def = enemyAttackDef(emitKey);
     const dir = enemy.facing >= 0 ? 1 : -1;
-    const x = dir > 0 ? enemy.x + enemy.w + 2 : enemy.x - 2;
-    const y = enemy.y + enemy.h * 0.4;
-    this.enemyBolts.push(new EnemyBolt(x, y, dir, {
-      speed: a.projSpeed,
-      damage: a.projDamage,
-      color: a.projColor,
-    }));
-    return this.enemyBolts[this.enemyBolts.length - 1];
+    const off = opts.offset || a.offset || def.offset || { x: 12, y: 0 };
+    const count = opts.count != null ? opts.count : (a.count != null ? a.count : (def.count || 1));
+    const spread = opts.spread != null ? opts.spread : (a.spread != null ? a.spread : (def.spread || 0));
+
+    const out = [];
+    for (let i = 0; i < count; i++) {
+      const t = count === 1 ? 0 : (i - (count - 1) / 2);
+      const x = enemy.cx + off.x * dir + t * spread * dir;
+      const y = enemy.cy + off.y;
+      const atk = new EnemyAttack(x, y, dir, {
+        ...opts,
+        kind: emitKey, // 形态 key 优先于 opts.kind（boss 招式的 kind 是 'lunge'/'emit'/'slam'，不是形态）
+        speed: opts.speed != null ? opts.speed : a.projSpeed,
+        damage: opts.damage != null ? opts.damage : a.projDamage,
+        color: opts.color || a.projColor,
+      });
+      this.enemyBolts.push(atk);
+      out.push(atk);
+    }
+    return count === 1 ? out[0] : out;
+  }
+
+  /** 兼容旧接口：发射怪物默认离体攻击（attack.emit，缺省 bolt） */
+  spawnEnemyBolt(enemy) {
+    return this.spawnEnemyAttack(enemy, enemy.attack && enemy.attack.emit);
   }
 
   update(dt) {
@@ -234,15 +259,28 @@ export default class World {
       }
     }
 
-    // 3) 怪物远程弹 -> 玩家受伤（经防御减伤；命中后弹丸消失）
+    // 3) 怪物离体攻击 -> 玩家受伤（经防御减伤；走既有伤害管线）
+    //    · 持续伤害区（b.tick>0）：原地按 tick 节拍反复结算，命中后不消失
+    //    · 弹体：去重（hasHit）→ 命中；pierce 次数用尽或 pierce=0 才回收
     for (const b of this.enemyBolts) {
       if (!b.active || p.hp <= 0) continue;
-      if (p.overlaps(b)) {
-        const px = p.cx, py = p.y;
+      if (!p.overlaps(b)) continue;
+      const px = p.cx, py = p.y;
+
+      if (b.tick > 0) {
+        if (!b.tickReady) continue; // 未到节拍
+        b.tickReady = false;
         if (p.hurtByRanged(b.damage, b.cx)) {
           this.spawnPlayerDamage(px, py, p.lastDamageApplied); // 红色：己方受到的伤害
-          b.active = false;
         }
+        continue;
+      }
+
+      if (b.hasHit && b.hasHit(p)) continue;
+      if (p.hurtByRanged(b.damage, b.cx)) {
+        this.spawnPlayerDamage(px, py, p.lastDamageApplied);
+        if (b.markHit) b.markHit(p);
+        if (!b.canPierceMore) b.active = false; // 穿透次数用尽才回收
       }
     }
   }

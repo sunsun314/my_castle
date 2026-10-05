@@ -48,14 +48,19 @@
     - `patrol` 巡逻兵：地面巡逻，撞墙/临崖掉头（基类默认行为，保持原手感），无主动攻击
     - `flyer` 游魂：**飞行**，无重力、垂直正弦起伏、撞墙掉头，生成时抬升悬浮；无主动攻击（漂浮接触型威胁）
     - `charger` 冲锋兽：地面冲锋 —— 玩家进入视野 -> **前摇蓄力**（停下蓄势、可被躲开）-> 高速冲锋 -> **后摇硬直**
-    - `shooter` 巫妖：地面远程 —— 玩家进入射程 -> **前摇蓄光并持续瞄准** -> 发射能量弹（`game/entities/enemyBolt.js`）-> **后摇僵直**
+    - `shooter` 巫妖：地面远程 —— 玩家进入射程 -> **前摇蓄光并持续瞄准** -> 发射能量弹（`attack.emit='bolt'`）-> **后摇僵直**
     - `jumper` 跳跳蛛：地面扑击 —— 玩家进入射程 -> **蹲伏前摇** -> 起跳扑向前方 -> **落地后摇**
     - `ceiling` 吊诡（**贴天花板**）：生成时自动向上吸附到实心/单向平台底部；玩家经过**正下方** -> **抖动前摇** -> 坠落砸击 -> **爬回天花板**
     - `diver` 恶鸦（**飞行俯冲**）：空中漂浮 -> 玩家进入范围 -> **悬停前摇并持续锁定方向** -> 朝玩家俯冲 -> **拉升后摇**
+    - `flamer` 炎魔（**离体·吐火**）：进入射程 -> 前摇聚气 -> **原地喷出持续伤害火焰区**（`emit='flame'`，按住期间每 `interval` 秒生成一段）-> 后摇
+    - `blader` 风刃使（**离体·风刃**）：进入射程 -> 前摇结印 -> **掷出正弦飞行、可穿透的双发风刃**（`emit='windblade'`）-> 后摇
+    - `boss` 魔王·阿撒兹（**多阶段 BOSS**）：重型（受击不位移/不硬直）；血量跌破阈值 -> **短暂无敌咆哮**（阶段切换）-> 换用该阶段的**招式表 / 弱点 / 配色 / 速度**继续战斗。招式循环出招，每招仍是四段状态机，`kind` 决定生效效果：`lunge` 冲撞 / `emit` 外放离体攻击（三连火球、连喷吐火）/ `slam` 起跳砸地放冲击波。阶段定义见 `ENEMY_TYPES.boss.phases`
     - 未指定的数值回落到 `constants.ENEMY`；新增一种怪只需在 `ENEMY_TYPES` 加一条并在关卡 `LEVEL1_ENEMY_TYPES` 里引用
-  - **主动攻击机制（与怪物强绑定）**：所有会攻击的怪共用一个四段状态机 `idle → windup(前摇) → active(生效) → recovery(后摇)`，但**每段的实际效果由该类型的行为分支独占实现**，参数（range/vRange/windup/active/recovery/cooldown + 机制专属 dashSpeed/proj*/hopSpeed*/dropSpeed/diveSpeed）全部写在该类型的 `attack` 块里。**触发方式统一为「玩家进入攻击范围即发动」**（`enemy._inRange`）；**前摇/后摇都刻意加长**：前摇给玩家反应窗口规避、后摇是安全输出窗口
-  - `game/world.js` 命中结算：玩家攻击盒 × 敌人受击盒（**每刀对每个敌人只结算一次**，按挥砍 id 判定）+ 弱点倍率 + 命中顿帧 + 敌人接触伤害 + **远程弹 × 玩家**（`enemyBolts`，经防御减伤）
-  - 关卡字符 `E` 标记敌人出生点（`config/level1.js`），类型由 `LEVEL1_ENEMY_TYPES` 按出生顺序一一对应
+  - **主动攻击机制（与怪物强绑定）**：所有会攻击的怪共用一个四段状态机 `idle → windup(前摇) → active(生效) → recovery(后摇)`，但**每段的实际效果由该类型的行为分支独占实现**，参数（range/vRange/windup/active/recovery/cooldown + 机制专属 dashSpeed/hopSpeed*/dropSpeed/diveSpeed）全部写在该类型的 `attack` 块里。**触发方式统一为「玩家进入攻击范围即发动」**（`enemy._inRange`）；**前摇/后摇都刻意加长**：前摇给玩家反应窗口规避、后摇是安全输出窗口
+  - **多阶段 BOSS**（`behavior:'boss'`）：类型带 `phases`（**≥2 段**，`at` = 进入该阶段的血量比例）。血量跌破阈值触发 `_beginPhaseTransition` —— **全程无敌**（`hurt()` 直接返回 false、攻击无效）、原地咆哮，结束后 `_applyPhase` 切换**招式表 / 弱点 / 配色 / 速度**。**招式与阶段强绑定**：每阶段自带 `moves` 循环出招，每招复用四段状态机，`_startMove`/`_tickMove` 按 `move.kind` 生效（`lunge`/`emit`/`slam`）；`heavy` 标志令 BOSS 受击不位移、不硬直，避免被连击锁死
+  - **离体攻击框架**（`config/enemyAttacks.js` 注册表 + `game/entities/enemyAttack.js`）：把「怪物外放出去的独立实体」做成数据驱动形态——`shape`（rect/circle/blade/flame，预留 sprite）、`motion`（**straight** 直线 / **arc** 抛物线 / **sine** 正弦波动 / **static** 原地持续伤害区）、`pierce` 穿透数、`tick` 持续伤害节拍、`count/spread/offset` 多发与枪口偏移，另可覆盖 `damage/speed/color`。怪物通过 `attack.emit` 引用形态（**机制与怪物强绑定**，形态可复用/替换）；发射统一走 `world.spawnEnemyAttack()`（`spawnEnemyBolt()` 为兼容别名），命中仍走既有伤害管线。**新增一种离体攻击 = 在注册表加一条**（接素材时补 `sprite`，或给 render 加一个 shape 分支），逻辑零改动
+  - `game/world.js` 命中结算：玩家攻击盒 × 敌人受击盒（**每刀对每个敌人只结算一次**，按挥砍 id 判定）+ 弱点倍率 + 命中顿帧 + 敌人接触伤害 + **离体攻击 × 玩家**（`enemyBolts`：弹体去重/穿透、持续伤害区按 tick 节拍，经防御减伤）
+  - 关卡字符 `E` 标记敌人出生点（`config/level1.js`），类型由 `LEVEL1_ENEMY_TYPES` 按出生顺序一一对应；**弱点表 `LEVEL1_ENEMY_WEAKNESSES` 必须与类型表同序等长**
   - **战斗飘字（伤害数字）**：命中瞬间弹出并**抛物线跳动 + 逐步淡出**（`game/entities/damageText.js`）——**白色 = 对怪物的伤害**、**红色 = 己方受到的伤害**（含接触与尖刺）；数值取实际结算后的伤害，`world.spawnDamageText()` / `spawnPlayerDamage()` 生成
 - **属性与能力系统（成长骨架）**
   - `game/stats.js` 属性计算管线：`base(等级) → 装备 flat → buff mul → 取整`；**只缓存派生结果，来源变化才重算**
@@ -115,9 +120,9 @@ minigame-castle/
 │   │   ├── damage.js            伤害机制表
 │   │   ├── elements.js          元素 / 攻击类型 / 弱点结算
 │   │   ├── buffs.js             限时增益
-│   │   ├── entities/            entity.js / player.js / enemy.js / enemyBolt.js / projectile.js / damageText.js
+│   │   ├── entities/            entity.js / player.js / enemy.js / enemyAttack.js / enemyBolt.js / projectile.js / damageText.js
 │   │   └── scenes/              scene.js / loading.js / play.js / inventory.js
-│   └── config/                  constants.js / items.js / enemies.js / level1.js
+│   └── config/                  constants.js / items.js / enemies.js / enemyAttacks.js / level1.js
 └── README.md
 ```
 
@@ -153,4 +158,4 @@ w.spawnPlayerDamage(p.cx, p.y, 5);           // 红
 ## 说明
 
 - 当前用**纯色块**渲染（零资源依赖，导入即可跑）。接入美术时把 `tilemap.render` / `player.render` 换成 `renderer.drawSprite(...)`，并给 `Renderer` 补图集切帧即可。
-- 所有手感/物理数值集中在 `js/config/constants.js`，装备/道具在 `js/config/items.js`，**怪物类型/数值/行为参数在 `js/config/enemies.js`**，元素/攻击类型/弱点倍率在 `js/game/elements.js`，敌人弱点与类型配置在 `js/config/level1.js`，伤害飘字在 `DAMAGE_TEXT`，下蹲高度在 `PLAYER.crouchH`，便于调参。
+- 所有手感/物理数值集中在 `js/config/constants.js`，装备/道具在 `js/config/items.js`，**怪物类型/数值/行为参数在 `js/config/enemies.js`**，**离体攻击形态在 `js/config/enemyAttacks.js`**，元素/攻击类型/弱点倍率在 `js/game/elements.js`，敌人弱点与类型配置在 `js/config/level1.js`，伤害飘字在 `DAMAGE_TEXT`，下蹲高度在 `PLAYER.crouchH`，便于调参。

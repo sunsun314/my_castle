@@ -84,12 +84,13 @@ export const ENEMY_TYPES = {
     color: '#22d3ee',
     attack: {
       kind: 'shoot',
+      emit: 'bolt',            // 离体攻击形态（见 config/enemyAttacks.js）
       range: 150, vRange: 44,  // 射程
       windup: 0.7,             // 前摇：蓄光并持续瞄准（加长）
       active: 0.12,            // 发射瞬间
       recovery: 0.85,          // 后摇：僵直（加长）
       cooldown: 0.6,
-      projSpeed: 150,
+      projSpeed: 150,          // 覆盖 bolt 默认值
       projDamage: 8,
       projColor: '#67e8f9',
     },
@@ -162,6 +163,94 @@ export const ENEMY_TYPES = {
       diveSpeed: 320,
       riseSpeed: 90,
     },
+  },
+
+  // —— 离体·吐火：炎魔（原地喷出持续伤害火焰区）——
+  flamer: {
+    name: '炎魔',
+    behavior: 'emitter',
+    w: 16, h: 18,
+    hp: 3, contactDamage: 10, exp: 9,
+    speed: 16,
+    knockback: 80,
+    color: '#ef4444',
+    colorCharge: '#fca5a5',
+    attack: {
+      kind: 'emit',
+      emit: 'flame',           // 形态：吐火（持续伤害区）
+      range: 84, vRange: 30,
+      windup: 0.85,            // 前摇：聚气（加长）
+      active: 0.6,             // 生效：持续喷火
+      recovery: 1.1,           // 后摇：喘息（加长）
+      cooldown: 0.8,
+      interval: 0.15,          // 每 0.15s 生成一段火焰区
+      offset: { x: 18, y: 0 }, // 枪口在身前
+    },
+  },
+
+  // —— 离体·风刃：风刃使（正弦飞行、可穿透的双发风刃）——
+  blader: {
+    name: '风刃使',
+    behavior: 'emitter',
+    w: 14, h: 18,
+    hp: 3, contactDamage: 9, exp: 9,
+    speed: 24,
+    knockback: 80,
+    color: '#22c55e',
+    colorCharge: '#86efac',
+    attack: {
+      kind: 'emit',
+      emit: 'windblade',       // 形态：风刃（正弦波动 + 穿透）
+      range: 176, vRange: 46,
+      windup: 0.7,             // 前摇：结印（加长）
+      active: 0.15,            // 生效：掷出
+      recovery: 0.9,           // 后摇（加长）
+      cooldown: 0.7,
+      count: 2, spread: 10,    // 双发风刃
+      offset: { x: 14, y: 0 },
+    },
+  },
+
+  // —— BOSS：多阶段（血量阈值切换招式 / 弱点 / 配色；切换时短暂无敌咆哮）——
+  //   phases 至少两段：at=进入该阶段的血量比例；moves 循环出招；
+  //   每个 move 复用四段状态机参数，kind 决定生效效果：
+  //     'lunge' 冲撞 / 'emit' 外放离体攻击 / 'slam' 砸地（起跳落地放冲击波）
+  boss: {
+    name: '魔王·阿撒兹',
+    behavior: 'boss',
+    w: 28, h: 34,
+    hp: 60, contactDamage: 16, exp: 200,
+    speed: 22,
+    knockback: 0,
+    heavy: true,              // 受击不位移、不硬直（不会被连击到死）
+    color: '#7c3aed',
+    colorCharge: '#c4b5fd',
+    phases: [
+      {
+        name: '傲慢', at: 1,
+        transition: 1.0, invuln: 1.2, speed: 22, color: '#7c3aed',
+        weaknesses: [{ kind: 'element', value: 'light' }],
+        moves: [
+          { kind: 'lunge', windup: 0.7, active: 0.5, recovery: 1.0, cooldown: 0.7,
+            range: 120, vRange: 40, dashSpeed: 190 },
+          { kind: 'emit', emit: 'fireball', count: 3, spread: 12, offset: { x: 16, y: -4 },
+            windup: 0.75, active: 0.15, recovery: 0.95, cooldown: 0.6, range: 180, vRange: 60 },
+        ],
+      },
+      {
+        name: '狂暴', at: 0.5,
+        transition: 1.2, invuln: 1.4, speed: 34, color: '#dc2626',
+        weaknesses: [{ kind: 'element', value: 'dark' }],
+        moves: [
+          { kind: 'emit', emit: 'flame', interval: 0.12, offset: { x: 20, y: 0 },
+            windup: 0.7, active: 0.8, recovery: 1.0, cooldown: 0.6, range: 110, vRange: 40 },
+          { kind: 'slam', emit: 'shockwave',
+            windup: 0.8, active: 0.5, recovery: 1.1, cooldown: 0.8, range: 96, vRange: 60, hopSpeedY: 240 },
+          { kind: 'lunge', windup: 0.55, active: 0.6, recovery: 0.8, cooldown: 0.5,
+            range: 160, vRange: 44, dashSpeed: 260 },
+        ],
+      },
+    ],
   },
 };
 
