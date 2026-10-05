@@ -16,9 +16,14 @@ export const PLAYER = {
   coyote: 0.1,       // 土狼时间（离地后仍可跳的宽限）
   jumpBuffer: 0.12,  // 跳跃缓冲（落地前提前按跳有效）
   invulnTime: 1.0,   // 受击无敌时长
-  attackDuration: 0.18,
-  attackReach: 22,   // 攻击盒水平长度
-  attackHeight: 18,  // 攻击盒高度
+  // 空手默认攻击参数；装备武器后由武器的 attack 覆盖（见 player.getAttackProfile）
+  attackDuration: 0.14,
+  attackReach: 16,   // 攻击盒水平长度
+  attackHeight: 16,  // 攻击盒高度
+  attackType: 'normal', // 空手 = 普通攻击
+  crouchH: 11,       // 下蹲碰撞体高度（≈站立一半 → 受击盒减半）
+  dropThroughTime: 0.18, // 下蹲跳下穿单向平台：忽略平台碰撞的时长
+  dropThroughSpeed: 40,  // 下蹲跳下穿的初始向下速度（脱离平台）
 
   // ---- 能力：跳跃变体 ----
   bigJumpMul: 1.6,   // 大跳（上+跳）相对普通跳的初速度倍率
@@ -35,6 +40,8 @@ export const PLAYER = {
 // 尖刺陷阱：固定按「最大生命」的百分比扣减（无视防御）
 export const SPIKE = {
   pct: 0.1, // 10%
+  attackType: 'normal', // 尖刺攻击归为「普通」类型
+  element: null,
 };
 
 // 副武器：魔法弹（上 + B 触发）。伤害取自玩家魔法力 mag。
@@ -46,6 +53,19 @@ export const MAGIC = {
   cost: 4,         // 每次消耗魔力
   cooldown: 0.35,  // 施法冷却
   color: '#7c5cff',
+  element: 'light',     // 默认光属性（可被戒指覆盖，见 player.getMagicProfile）
+  attackType: 'normal', // 法术归为「普通」攻击类型
+  // 弹道行为（默认直线弹；副武器可在 items 的 magic 里覆盖）：
+  //  'bolt' 直线单体 / 'pierce' 穿透 / 'burst' 爆裂 / 'slow' 减速 / 'chain' 连锁
+  behavior: 'bolt',
+  pierce: 1,        // pierce：可穿透的敌人数
+  burstRadius: 24,  // burst：爆炸半径（像素）
+  burstMul: 0.6,    // burst：溅射伤害倍率
+  slowMul: 0.5,     // slow：命中后速度倍率
+  slowTime: 1.5,    // slow：减速持续（秒）
+  chainCount: 2,    // chain：连锁跳数
+  chainRange: 40,   // chain：连锁搜索半径（像素）
+  chainMul: 0.6,    // chain：每跳伤害倍率
 };
 
 // 经验曲线：升到 level+1 所需经验
@@ -72,8 +92,14 @@ export const ENEMY = {
   knockback: 90,     // 受击击退速度
   deathTime: 0.35,   // 死亡演出时长
   color: '#e5484d',  // 身体（红色，一眼能认出是怪）
+  slowColor: '#7fd7ff', // 被减速时的身体色（冰蓝）
   eye: '#2a0b0d',
   deathColor: '#ffd166',
+  // 怪物攻击：碰撞攻击统一为「普通」类型、无属性
+  attackType: 'normal',
+  element: null,
+  // 默认无弱点；具体弱点由关卡出生点配置（见 config/level1.js）
+  weaknesses: [],
 };
 
 export const COLORS = {
@@ -81,4 +107,18 @@ export const COLORS = {
   player: '#4aa3ff',
   playerFace: '#0b1020',
   attack: '#ffe066',
+};
+
+// 战斗飘字（伤害数字）：白色 = 对怪物造成的伤害，红色 = 己方受到的伤害。
+// 运动为「上抛 + 重力」的抛物线，末段随时间淡出。
+export const DAMAGE_TEXT = {
+  life: 0.85,             // 存活时长（秒）
+  riseSpeed: -78,         // 初始上抛速度（负 = 向上）
+  gravity: 260,           // 重力，形成抛物线回落
+  drift: 26,              // 水平漂移速度（左右随机）
+  colorEnemy: '#ffffff',  // 对怪物造成的伤害
+  colorPlayer: '#ff5a5a', // 己方（玩家）受到的伤害
+  font: 'bold 9px monospace',
+  fadeStart: 0.35,        // 生命周期进度超过该比例后开始淡出
+  offsetY: -4,            // 生成时相对实体顶部的偏移
 };

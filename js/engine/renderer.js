@@ -82,10 +82,12 @@ export default class CanvasRenderer extends Renderer {
 
   drawText(text, x, y, opts = {}) {
     const ctx = this.ctx;
+    ctx.globalAlpha = opts.alpha == null ? 1 : opts.alpha;
     ctx.fillStyle = opts.color || '#ffffff';
     ctx.font = opts.font || '10px sans-serif';
     ctx.textAlign = opts.align || 'left';
     ctx.textBaseline = opts.baseline || 'top';
     ctx.fillText(text, x, y);
+    ctx.globalAlpha = 1;
   }
 }

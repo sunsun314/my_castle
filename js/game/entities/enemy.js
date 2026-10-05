@@ -9,6 +9,11 @@ import { GRAVITY, MAX_FALL, ENEMY } from '../../config/constants';
  *  - 被玩家攻击命中：掉血 + 白闪 + 击退硬直
  *  - 血量归零：播放死亡演出后消失
  *
+ * 战斗属性：
+ *  - weaknesses：至多两个弱点，每个是元素弱点或攻击类型弱点（见 game/elements.js）。
+ *    玩家攻击命中弱点时按 150% / 300% 结算（在 world._resolveCombat 里应用）。
+ *  - attackType / element：本怪碰撞攻击的属性，统一为「普通」、无属性。
+ *
  * 复用 Entity 的分轴瓦片碰撞（moveX/moveY），自身只负责 AI 与受伤逻辑。
  */
 export default class Enemy extends Entity {
@@ -23,12 +28,24 @@ export default class Enemy extends Entity {
       : (opts.atk != null ? opts.atk : ENEMY.contactDamage); // 接触伤害（碰到玩家时扣玩家血）
     this.exp = opts.exp != null ? opts.exp : ENEMY.exp;   // 击杀奖励经验
 
+    // ---- 战斗属性 ----
+    this.weaknesses = opts.weaknesses || ENEMY.weaknesses;   // [{ kind:'element'|'attack', value }]
+    this.attackType = opts.attackType || ENEMY.attackType;   // 碰撞攻击类型（普通）
+    this.element = opts.element != null ? opts.element : ENEMY.element; // 碰撞攻击元素（无）
+
     this.dir = -1;          // -1 左 / 1 右
     this.facing = this.dir;
     this.hurtTimer = 0;     // 受击硬直（被击退期间不主动移动）
     this.lastHitSwing = -1; // 被哪一次挥砍命中过（保证每刀只结算一次）
     this.flash = 0;         // 白闪计时
     this.deadTimer = 0;     // 死亡演出计时
+    this.slowTimer = 0;     // 减速剩余时间
+    this.slowMul = 1;       // 减速期间速度倍率
+  }
+
+  /** 本怪攻击的战斗属性（供玩家受伤结算/展示使用） */
+  getAttackInfo() {
+    return { element: this.element, attackType: this.attackType };
   }
 
   update(dt, world) {
@@ -36,6 +53,7 @@ export default class Enemy extends Entity {
     const map = world.map;
 
     if (this.flash > 0) this.flash -= dt;
+    if (this.slowTimer > 0) this.slowTimer -= dt;
 
     // ---- 死亡演出：上浮淡出，结束后标记 dead ----
     if (this.hp <= 0) {
@@ -64,7 +82,7 @@ export default class Enemy extends Entity {
     // ---- 巡逻 AI ----
     // 临崖掉头
     if (this.onGround && this._wouldFall(map)) this._turn();
-    this.vx = this.speed * this.dir;
+    this.vx = this.speed * this.dir * (this.slowTimer > 0 ? this.slowMul : 1);
     this.facing = this.dir;
     this.moveX(dt, map);
     if (this.vx === 0) this._turn(); // 撞墙：moveX 已把 vx 归零
@@ -78,6 +96,12 @@ export default class Enemy extends Entity {
   _turn() {
     this.dir *= -1;
     this.vx = 0;
+  }
+
+  /** 施加减速（取更强的倍率、更长的剩余时间） */
+  applySlow(mul = 0.5, time = 1.5) {
+    this.slowMul = Math.min(this.slowMul, mul);
+    this.slowTimer = Math.max(this.slowTimer, time);
   }
 
   /** 前方脚下有没有可站立的地面（没有=悬崖，掉头） */
@@ -117,7 +141,7 @@ export default class Enemy extends Entity {
     }
 
     // 受击白闪
-    const color = this.flash > 0 ? '#ffffff' : ENEMY.color;
+    const color = this.flash > 0 ? '#ffffff' : (this.slowTimer > 0 ? ENEMY.slowColor : ENEMY.color);
     renderer.drawRect(this.x, this.y, this.w, this.h, color);
 
     // 眼睛（指示朝向）

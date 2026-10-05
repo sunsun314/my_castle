@@ -21,3 +21,15 @@ export const LEVEL1 = [
   '####################....##########...###########',
   '####################....##########...###########',
 ];
+
+// 每个敌人出生点（按 enemySpawns 出现顺序）对应的弱点配置（纯数据，至多两个）：
+//   kind: 'element' | 'attack'；value 见 game/elements.js
+//   element: light/dark/fire/water/wind/thunder/earth
+//   attack : slash/heavy/normal
+// 命中 1 个弱点 -> 150%，命中 2 个 -> 300%（结算见 world._resolveCombat + game/elements.js）
+export const LEVEL1_ENEMY_WEAKNESSES = [
+  // 第 1 只：斩击弱点 + 火属性弱点（用烈焰剑可同时命中两个 -> 300%）
+  [{ kind: 'attack', value: 'slash' }, { kind: 'element', value: 'fire' }],
+  // 第 2 只：雷属性弱点（单弱点）
+  [{ kind: 'element', value: 'thunder' }],
+];

@@ -2,7 +2,9 @@ import { DISPLAY } from './display';
 
 const JOY_RADIUS = 28;
 const JOY_DEADZONE = 0.16;
-const UP_DEADZONE = 0.3;   // 判定「上」所需的最小上推幅度
+const UP_DEADZONE = 0.3;     // 判定「上」所需的最小上推幅度
+const DOWN_DEADZONE = 0.3;   // 判定「下」所需的最小下推幅度
+const DOWN_CONE = Math.tan(Math.PI / 6); // 正下 ±30° 锥（tan30°≈0.577）
 const BTN_RADIUS = 18;
 
 /**
@@ -171,6 +173,15 @@ export default class Input {
   get up() {
     if (this.axisY > -UP_DEADZONE) return false;
     return Math.abs(this.axisX) <= -this.axisY;
+  }
+
+  /**
+   * 「下」方向：正下 ±30° 锥形判定（用于下蹲）。
+   * 注意：不能命名为 down —— 会与 down(name) 按钮方法重名而覆盖掉。
+   */
+  get downward() {
+    if (this.axisY < DOWN_DEADZONE) return false;
+    return Math.abs(this.axisX) <= this.axisY * DOWN_CONE;
   }
 
   down(name) {

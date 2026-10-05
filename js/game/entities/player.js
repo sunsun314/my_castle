@@ -5,13 +5,14 @@ import { resolveDamage, DamageKind } from '../damage';
 import BuffList from '../buffs';
 import { ITEMS } from '../../config/items';
 
-// 玩家状态机（骨架先覆盖地面/空中/攻击，后续扩展 dash/wallSlide 等）
+// 玩家状态机（骨架先覆盖地面/空中/攻击/下蹲，后续扩展 dash/wallSlide 等）
 export const PlayerState = {
   IDLE: 'idle',
   RUN: 'run',
   JUMP: 'jump',
   FALL: 'fall',
   ATTACK: 'attack',
+  CROUCH: 'crouch',
   HURT: 'hurt',
   DEAD: 'dead',
 };
@@ -26,7 +27,7 @@ export default class Player extends Entity {
     this.level = 1;
     this.exp = 0;
     this.abilities = { doubleJump: true, bigJump: true, magic: true, dash: false };
-    this.equipment = { weapon: null, armor: null, ring: null };
+    this.equipment = { weapon: null, armor: null, ring: null, subweapon: null };
     this.inventory = [];        // 背包：拥有但未装备的物品
     this.buffs = new BuffList();
     this._seedStartingGear();
@@ -46,11 +47,13 @@ export default class Player extends Entity {
     this.jumpBufferBig = false; // 缓冲的这一次跳是否为「上+跳」大跳
     this.airJumpsLeft = 0;      // 剩余空中跳次数
     this._jumpCut = true;       // 当前这次跳是否允许松手截断（大跳不截断）
-    this.attackTimer = 0;       // 攻击判定持续时间
+    this.attackTimer = 0;       // 攻击判定持续时间（近战时 = 当前武器生效时间）
     this.attackId = 0;          // 挥砍序号，用于「每刀只结算一次」
     this.meleeActive = false;   // 本次攻击是否为近战（魔法时关闭近战判定）
+    this.crouching = false;     // 是否处于下蹲（碰撞体高度减半 = 受击范围减半）
     this.magicCd = 0;           // 副武器施法冷却
     this.invuln = 0;            // 剩余无敌时间
+    this.lastDamageApplied = 0; // 最近一次实际扣减量（供伤害飘字读取）
   }
 
   // ================= 属性系统 =================
@@ -81,9 +84,16 @@ export default class Player extends Entity {
 
   /** 初始赠送：一进游戏背包里就有可换装的物品，便于体验装备机制 */
   _seedStartingGear() {
+    this.addItem(ITEMS.dagger);
     this.addItem(ITEMS.iron_sword);
+    this.addItem(ITEMS.flame_blade);
+    this.addItem(ITEMS.frost_spear);
+    this.addItem(ITEMS.thunder_maul);
     this.addItem(ITEMS.leather_armor);
     this.addItem(ITEMS.mage_ring);
+    this.addItem(ITEMS.ember_tome);
+    this.addItem(ITEMS.frost_tome);
+    this.addItem(ITEMS.gale_tome);
     this.addItem(ITEMS.power_potion);
   }
 
@@ -173,6 +183,7 @@ export default class Player extends Entity {
     if (this.invuln > 0) this.invuln -= dt;
     if (this.attackTimer > 0) this.attackTimer -= dt;
     if (this.magicCd > 0) this.magicCd -= dt;
+    if (this.dropThrough > 0) this.dropThrough -= dt;
     this.jumpBuffer -= dt;
 
     // ---- Buff 倒计时（过期则重算属性）+ 魔力回复 ----
@@ -191,8 +202,25 @@ export default class Player extends Entity {
       this.coyote -= dt;
     }
 
-    // ---- 水平输入 ----
-    const ax = input.axisX;
+    // 「近战生效时间」：武器攻击判定存续期间锁定跳跃与移动（不能以此打断），
+    // 只有副武器（上+B 魔法）能打断它；生效时长随武器不同。
+    const meleeActive = this.meleeActive && this.attackTimer > 0;
+
+    // ---- 下蹲：地面 + 摇杆「正下 ±30° 锥」时触发 ----
+    // 碰撞体高度减半（受击盒减半）；脚底位置不变、顶部下沉；站起前检查头顶空间。
+    if (this.onGround && input.downward) {
+      this._setCrouch(true);
+    } else if (this.crouching && this._canStand(map)) {
+      this._setCrouch(false);
+    }
+
+    // ---- 下蹲 + 跳：从单向平台向下穿越（下蹲时按跳 = 下穿，而非起跳）----
+    if (this.crouching && input.pressed('jump') && this._onPlatform(map)) {
+      this._startDropThrough();
+    }
+
+    // ---- 水平输入（生效时间内忽略移动输入，攻击不可被移动取消）----
+    const ax = meleeActive ? 0 : input.axisX;
     const control = this.onGround ? 1 : AIR_INPUT;
     if (Math.abs(ax) > 0.01) {
       this.vx = ax * PLAYER.moveSpeed;
@@ -204,11 +232,12 @@ export default class Player extends Entity {
     }
 
     // ---- 跳跃：按下瞬间采样「是否上+跳」（大跳变体）----
-    if (input.pressed('jump')) {
+    // 生效时间内跳跃被锁定：不采样、不执行（已有缓冲也不消耗）；下蹲时也不能跳。
+    if (!meleeActive && !this.crouching && input.pressed('jump')) {
       this.jumpBuffer = PLAYER.jumpBuffer;
       this.jumpBufferBig = input.up;
     }
-    if (this.jumpBuffer > 0) {
+    if (!meleeActive && !this.crouching && this.jumpBuffer > 0) {
       if (this.coyote > 0) {
         // 地面/土狼时间：普通跳 或 大跳（需能力 + 魔力足够）
         const canBig = this.jumpBufferBig && this.abilities.bigJump
@@ -230,17 +259,21 @@ export default class Player extends Entity {
     if (this._jumpCut && !jumpHeld && this.vy < 0) gravity *= PLAYER.jumpCut;
 
     // ---- 攻击：B = 近战；上+B = 副武器魔法（消耗 MP，伤害走 mag）----
-    if (input.pressed('attack') && this.attackTimer <= 0) {
+    // 副武器可在近战「生效时间」内打断并取消其判定；反向（近战打断魔法）不允许。
+    // 下蹲不影响攻击：仍可发动普通攻击（攻击盒会随身体一起下沉）。
+    if (input.pressed('attack')) {
+      const magicProf = this.getMagicProfile();
       const wantMagic = input.up && this.abilities.magic
-        && this.magicCd <= 0 && this.mp >= MAGIC.cost;
-      if (wantMagic) {
-        this.mp -= MAGIC.cost;
-        this.magicCd = MAGIC.cooldown;
+        && this.magicCd <= 0 && this.mp >= magicProf.cost;
+      if (wantMagic && (this.attackTimer <= 0 || meleeActive)) {
+        this.mp -= magicProf.cost;
+        this.magicCd = magicProf.cooldown;
         this.attackTimer = PLAYER.attackDuration;
-        this.meleeActive = false;
+        this.meleeActive = false;          // 取消近战判定 = 打断
         world.spawnMagic(this);
-      } else {
-        this.attackTimer = PLAYER.attackDuration;
+      } else if (this.attackTimer <= 0) {
+        // 近战：生效时长跟随武器（不同武器出手/判定时间不同）
+        this.attackTimer = this.getAttackProfile().duration;
         this.attackId += 1;
         this.meleeActive = true;
       }
@@ -254,11 +287,73 @@ export default class Player extends Entity {
 
     // ---- 危险判定 ----
     // 尖刺：固定扣减最大生命的百分比（无视防御），受无敌帧保护
-    if (this.invuln <= 0 && this._touchingHazard(map)) this.hurtBySpike();
+    if (this.invuln <= 0 && this._touchingHazard(map)) {
+      const hx = this.cx, hy = this.y;
+      if (this.hurtBySpike()) world.spawnPlayerDamage(hx, hy, this.lastDamageApplied);
+    }
     // 坠出地图：不扣血，仅复位回出生点
     if (this.y > map.pixelHeight + 48) this.fallOut();
 
     this._updateState();
+  }
+
+  // ================= 下蹲 =================
+
+  /**
+   * 切换下蹲：保持脚底（bottom）不变，只改顶部与高度。
+   * 下蹲 -> 高度减半（受击盒减半）；站起 -> 恢复（调用方需先用 _canStand 检查头顶）。
+   */
+  _setCrouch(on) {
+    if (on === this.crouching) return;
+    const dh = PLAYER.h - PLAYER.crouchH;
+    if (on) {
+      this.y += dh;
+      this.h = PLAYER.crouchH;
+      this.crouching = true;
+    } else {
+      this.y -= dh;
+      this.h = PLAYER.h;
+      this.crouching = false;
+    }
+  }
+
+  /** 头顶是否有足够空间站起（探测站起后新增的那段高度所在的瓦片行） */
+  _canStand(map) {
+    const dh = PLAYER.h - PLAYER.crouchH;
+    const ts = map.tileSize;
+    const newTop = this.y - dh;
+    const c0 = Math.floor(this.x / ts);
+    const c1 = Math.floor((this.x + this.w - 1) / ts);
+    const rTop = Math.floor(newTop / ts);
+    const rBot = Math.floor((this.y - 1) / ts);
+    for (let r = rTop; r <= rBot; r++) {
+      for (let c = c0; c <= c1; c++) {
+        if (map.isSolid(c, r)) return false;
+      }
+    }
+    return true;
+  }
+
+  /** 脚底是否正好踩在单向平台上（供「下蹲跳下穿」判断） */
+  _onPlatform(map) {
+    if (!this.onGround) return false;
+    const ts = map.tileSize;
+    const row = Math.floor((this.y + this.h) / ts);
+    const c0 = Math.floor(this.x / ts);
+    const c1 = Math.floor((this.x + this.w - 1) / ts);
+    for (let c = c0; c <= c1; c++) {
+      if (map.isPlatform(c, row) && !map.isSolid(c, row)) return true;
+    }
+    return false;
+  }
+
+  /** 触发下穿：短暂忽略单向平台 + 给一个向下初速度，脱离平台后自然下落 */
+  _startDropThrough() {
+    this.dropThrough = PLAYER.dropThroughTime;
+    this.vy = Math.max(this.vy, PLAYER.dropThroughSpeed);
+    this.onGround = false;
+    this.coyote = 0;
+    this._jumpCut = true;
   }
 
   _doJump(mul = 1, cut = true) {
@@ -275,6 +370,8 @@ export default class Player extends Entity {
       this.state = PlayerState.HURT;
     } else if (this.attackTimer > 0 && this.onGround) {
       this.state = PlayerState.ATTACK;
+    } else if (this.crouching) {
+      this.state = PlayerState.CROUCH;
     } else if (!this.onGround) {
       this.state = this.vy < 0 ? PlayerState.JUMP : PlayerState.FALL;
     } else if (Math.abs(this.vx) > 5) {
@@ -298,11 +395,63 @@ export default class Player extends Entity {
     return false;
   }
 
-  /** 攻击判定盒（世界坐标） */
+  /**
+   * 当前攻击参数：攻击范围 / 高度 / 生效时长（抬手）「跟着武器走」。
+   * 装备了带 attack 的武器就用它的；否则回落到空手默认值（PLAYER.attack*）。
+   */
+  getAttackProfile() {
+    const w = this.equipment.weapon;
+    const a = (w && w.attack) || null;
+    return {
+      reach: a && a.reach != null ? a.reach : PLAYER.attackReach,
+      height: a && a.height != null ? a.height : PLAYER.attackHeight,
+      duration: a && a.duration != null ? a.duration : PLAYER.attackDuration,
+      // 战斗属性跟随武器；空手 = 普通攻击、无属性
+      element: w && w.element != null ? w.element : null,
+      attackType: w && w.attackType ? w.attackType : PLAYER.attackType,
+    };
+  }
+
+  /**
+   * 副武器（魔法弹）的战斗属性：默认光属性 / 普通类型，可被戒指的 element 覆盖。
+   */
+  getMagicProfile() {
+    const sw = this.equipment.subweapon;
+    const ring = this.equipment.ring;
+    const m = (sw && sw.magic) || {};
+    // 属性优先级：副武器 > 戒指（保留旧的元素戒指覆盖路径）> 默认光
+    const element = (sw && sw.element != null)
+      ? sw.element
+      : (ring && ring.element ? ring.element : MAGIC.element);
+    return {
+      element,
+      attackType: (sw && sw.attackType) ? sw.attackType : MAGIC.attackType,
+      cost: m.cost != null ? m.cost : MAGIC.cost,
+      cooldown: m.cooldown != null ? m.cooldown : MAGIC.cooldown,
+      speed: m.speed != null ? m.speed : MAGIC.speed,
+      life: m.life != null ? m.life : MAGIC.life,
+      w: m.w != null ? m.w : MAGIC.w,
+      h: m.h != null ? m.h : MAGIC.h,
+      color: m.color != null ? m.color : MAGIC.color,
+      behavior: m.behavior != null ? m.behavior : MAGIC.behavior,
+      pierce: m.pierce != null ? m.pierce : MAGIC.pierce,
+      burstRadius: m.burstRadius != null ? m.burstRadius : MAGIC.burstRadius,
+      burstMul: m.burstMul != null ? m.burstMul : MAGIC.burstMul,
+      slowMul: m.slowMul != null ? m.slowMul : MAGIC.slowMul,
+      slowTime: m.slowTime != null ? m.slowTime : MAGIC.slowTime,
+      chainCount: m.chainCount != null ? m.chainCount : MAGIC.chainCount,
+      chainRange: m.chainRange != null ? m.chainRange : MAGIC.chainRange,
+      chainMul: m.chainMul != null ? m.chainMul : MAGIC.chainMul,
+    };
+  }
+
+  /** 攻击判定盒（世界坐标）：范围取自当前武器 */
   getAttackHitbox() {
-    const reach = PLAYER.attackReach;
-    const hh = PLAYER.attackHeight;
+    const prof = this.getAttackProfile();
+    const reach = prof.reach;
+    const hh = prof.height;
     const x = this.facing > 0 ? this.x + this.w : this.x - reach;
+    // 判定盒竖直方向跟随当前身体：下蹲时身体变矮、顶部下沉，攻击盒随之整体下沉
     const y = this.y + (this.h - hh) / 2;
     return { x, y, w: reach, h: hh };
   }
@@ -320,6 +469,7 @@ export default class Player extends Entity {
     if (this.invuln > 0 && !opts.force) return false;
 
     this.hp -= final;
+    this.lastDamageApplied = final;
     if (this.hp <= 0) {
       this.respawn();
       return true;
@@ -348,6 +498,8 @@ export default class Player extends Entity {
 
   /** 机制③：坠出地图——不扣血，仅复位到出生点（保留当前 HP/MP） */
   fallOut() {
+    this.crouching = false;
+    this.h = PLAYER.h;
     this.x = this.spawnX;
     this.y = this.spawnY;
     this.vx = 0;
@@ -358,6 +510,8 @@ export default class Player extends Entity {
   }
 
   respawn() {
+    this.crouching = false;
+    this.h = PLAYER.h;
     this.hp = this.stats.maxHp;
     this.mp = this.stats.maxMp;
     this.x = this.spawnX;

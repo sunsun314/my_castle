@@ -12,17 +12,30 @@ export default class PlayScene extends Scene {
   update(dt) {
     // 顶部中央「背包」按钮：打开装备管理（覆盖层场景会冻结世界、不再结算）
     if (this.app.input.tapIn(this._backpackRect(this.app.renderer))) {
-      this.app.scenes.push(new InventoryScene(this.app, this.world.player));
+      this.app.scenes.push(new InventoryScene(this.app, this.world.player, 'gear'));
+      return;
+    }
+    // 平行入口：「魔法」按钮 → 直接打开副武器页
+    if (this.app.input.tapIn(this._magicRect(this.app.renderer))) {
+      this.app.scenes.push(new InventoryScene(this.app, this.world.player, 'magic'));
       return;
     }
     this.world.update(dt);
   }
 
-  /** 顶部中央「背包」按钮的命中矩形（update / render 共用，保证点哪画哪） */
+  /** 顶部中央两个 HUD 按钮（背包 / 魔法）的命中矩形（update / render 共用） */
   _backpackRect(r) {
     const w = 44;
     const h = 16;
-    return { x: (r.width - w) / 2, y: 5, w, h };
+    const gap = 6;
+    const startX = (r.width - (w * 2 + gap)) / 2;
+    return { x: startX, y: 5, w, h };
+  }
+
+  /** 「魔法」按钮（与「背包」平行）——直接打开副武器装备页 */
+  _magicRect(r) {
+    const b = this._backpackRect(r);
+    return { x: b.x + b.w + 6, y: b.y, w: b.w, h: b.h };
   }
 
   render(r) {
@@ -87,11 +100,15 @@ export default class PlayScene extends Scene {
       font: mono,
     });
 
-    // 顶部中央：背包按钮（点击打开装备管理菜单）
-    const br = this._backpackRect(r);
-    r.drawRect(br.x, br.y, br.w, br.h, '#2a3350');
-    r.drawRect(br.x, br.y, br.w, br.h, '#4aa3ff', 0.1);
-    r.drawText('背包', br.x + br.w / 2, br.y + br.h / 2, {
+    // 顶部中央：背包 / 魔法 两个平行按钮（分别打开装备页 / 副武器页）
+    this._drawHudButton(r, this._backpackRect(r), '背包');
+    this._drawHudButton(r, this._magicRect(r), '魔法');
+  }
+
+  _drawHudButton(r, rect, label) {
+    r.drawRect(rect.x, rect.y, rect.w, rect.h, '#2a3350');
+    r.drawRect(rect.x, rect.y, rect.w, rect.h, '#4aa3ff', 0.1);
+    r.drawText(label, rect.x + rect.w / 2, rect.y + rect.h / 2, {
       align: 'center',
       baseline: 'middle',
       color: '#cfe0ff',

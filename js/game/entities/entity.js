@@ -20,6 +20,7 @@ export default class Entity {
     this.onGround = false;
     this.active = true;
     this.dead = false;
+    this.dropThrough = 0; // >0 时忽略单向平台碰撞（下蹲跳下穿）
 
     this.hp = 1;
     this.maxHp = 1;
@@ -75,7 +76,7 @@ export default class Entity {
       const row = Math.floor((this.y + this.h) / ts);
       for (let c = c0; c <= c1; c++) {
         const solid = map.isSolid(c, row);
-        const platform = map.isPlatform(c, row) && prevBottom <= row * ts + 1;
+        const platform = map.isPlatform(c, row) && prevBottom <= row * ts + 1 && this.dropThrough <= 0;
         if (solid || platform) {
           this.y = row * ts - this.h;
           this.vy = 0;
