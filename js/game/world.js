@@ -1,10 +1,12 @@
 import Camera from '../engine/camera';
 import { DISPLAY } from '../engine/display';
 import { TILE, PLAYER, ENEMY, TRANSFORM, DAMAGE_TEXT } from '../config/constants';
-import { LEVEL1, LEVEL1_ENEMY_WEAKNESSES } from '../config/level1';
+import { LEVEL1, LEVEL1_ENEMY_WEAKNESSES, LEVEL1_ENEMY_TYPES } from '../config/level1';
+import { ENEMY_TYPES } from '../config/enemies';
 import Tilemap from './tilemap';
 import Player from './entities/player';
 import Enemy from './entities/enemy';
+import EnemyBolt from './entities/enemyBolt';
 import MagicBolt from './entities/projectile';
 import DamageText from './entities/damageText';
 import { applyWeakness } from './elements';
@@ -23,6 +25,7 @@ export default class World {
     this.enemies = this._spawnEnemies();
     this.entities = [this.player, ...this.enemies];
     this.projectiles = []; // 副武器弹丸（上+B 魔法）
+    this.enemyBolts = [];  // 怪物远程弹
     this.damageTexts = []; // 战斗飘字（伤害数字）
     this.magicFx = [];     // 法术特效（爆裂环 / 连锁电弧）
 
@@ -39,10 +42,14 @@ export default class World {
 
   _spawnEnemies() {
     return this.map.enemySpawns.map(({ col, row }, i) => {
-      const x = col * TILE + (TILE - ENEMY.w) / 2;
-      const y = (row + 1) * TILE - ENEMY.h;
+      const type = LEVEL1_ENEMY_TYPES[i] || 'patrol';       // 类型来自关卡配置
+      const def = ENEMY_TYPES[type] || ENEMY_TYPES.patrol;  // 类型定义（取尺寸）
+      const w = def.w || ENEMY.w;
+      const h = def.h || ENEMY.h;
+      const x = col * TILE + (TILE - w) / 2;
+      const y = (row + 1) * TILE - h;
       const weaknesses = LEVEL1_ENEMY_WEAKNESSES[i] || []; // 弱点来自关卡配置
-      return new Enemy(x, y, { weaknesses });
+      return new Enemy(x, y, { weaknesses, type });
     });
   }
 
@@ -79,6 +86,20 @@ export default class World {
     this.projectiles.push(new MagicBolt(x, y, dir, player.stats.mag, info));
   }
 
+  /** 怪物远程弹（远程怪发射）：水平飞行、命中玩家/撞墙/超时回收 */
+  spawnEnemyBolt(enemy) {
+    const a = enemy.attack || {}; // 弹道参数与怪物强绑定（存在其 attack 块里）
+    const dir = enemy.facing >= 0 ? 1 : -1;
+    const x = dir > 0 ? enemy.x + enemy.w + 2 : enemy.x - 2;
+    const y = enemy.y + enemy.h * 0.4;
+    this.enemyBolts.push(new EnemyBolt(x, y, dir, {
+      speed: a.projSpeed,
+      damage: a.projDamage,
+      color: a.projColor,
+    }));
+    return this.enemyBolts[this.enemyBolts.length - 1];
+  }
+
   update(dt) {
     // 命中顿帧：短暂冻结整个世界（飘字也一并冻结，强化打击感）
     if (this.hitStop > 0) {
@@ -97,6 +118,14 @@ export default class World {
     }
     if (this.projectiles.some((pr) => !pr.active)) {
       this.projectiles = this.projectiles.filter((pr) => pr.active);
+    }
+
+    // 怪物远程弹：更新 + 回收失效项
+    for (const b of this.enemyBolts) {
+      if (b.active) b.update(dt, this);
+    }
+    if (this.enemyBolts.some((b) => !b.active)) {
+      this.enemyBolts = this.enemyBolts.filter((b) => b.active);
     }
 
     this._resolveCombat();
@@ -204,6 +233,18 @@ export default class World {
         }
       }
     }
+
+    // 3) 怪物远程弹 -> 玩家受伤（经防御减伤；命中后弹丸消失）
+    for (const b of this.enemyBolts) {
+      if (!b.active || p.hp <= 0) continue;
+      if (p.overlaps(b)) {
+        const px = p.cx, py = p.y;
+        if (p.hurtByRanged(b.damage, b.cx)) {
+          this.spawnPlayerDamage(px, py, p.lastDamageApplied); // 红色：己方受到的伤害
+          b.active = false;
+        }
+      }
+    }
   }
 
   _overlapRect(a, b) {
@@ -286,6 +327,9 @@ export default class World {
     }
     for (const pr of this.projectiles) {
       if (pr.active && pr.render) pr.render(renderer, this);
+    }
+    for (const b of this.enemyBolts) {
+      if (b.active && b.render) b.render(renderer, this);
     }
     this._renderMagicFx(renderer); // 法术特效（爆裂环 / 连锁电弧）
     for (const t of this.damageTexts) t.render(renderer); // 飘字画在最上层

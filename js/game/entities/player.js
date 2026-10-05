@@ -648,6 +648,13 @@ export default class Player extends Entity {
     return this._applyDamage(final, { knockback: true, knockbackDir: dir });
   }
 
+  /** 机制①b：怪物远程弹——原始伤害经「防御」减伤（与接触同管线） */
+  hurtByRanged(raw, fromX = this.cx) {
+    const final = resolveDamage(DamageKind.RANGED, { raw, def: this.stats.def });
+    const dir = this.cx >= fromX ? 1 : -1;
+    return this._applyDamage(final, { knockback: true, knockbackDir: dir });
+  }
+
   /** 机制②：尖刺陷阱——无视防御，固定扣除最大生命的一定百分比 */
   hurtBySpike() {
     const final = resolveDamage(DamageKind.SPIKE, { maxHp: this.stats.maxHp });

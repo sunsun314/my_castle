@@ -44,9 +44,18 @@
   - `game/entities/entity.js` AABB + 分轴瓦片碰撞（含单向平台）
   - `game/entities/player.js` 状态机（idle/run/jump/fall/attack/crouch/hurt/dead）+ 手感参数；下蹲：高度减半（受击盒减半）、脚底不动、站起查头顶空间、下蹲不能跳但可攻击、下蹲跳下穿单向平台
 - **M3 战斗闭环**
-  - `game/entities/enemy.js` 巡逻小怪：撞墙/临崖掉头、掉血白闪、击退硬直、死亡演出，自带碰撞伤害 `contactDamage`
-  - `game/world.js` 命中结算：玩家攻击盒 × 敌人受击盒（**每刀对每个敌人只结算一次**，按挥砍 id 判定）+ 弱点倍率 + 命中顿帧 + 敌人接触伤害
-  - 关卡字符 `E` 标记敌人出生点（`config/level1.js`）
+  - **多类型怪物**（`config/enemies.js` 的 `ENEMY_TYPES` 数据表 + `game/entities/enemy.js` 按 `behavior` 分派行为）：
+    - `patrol` 巡逻兵：地面巡逻，撞墙/临崖掉头（基类默认行为，保持原手感），无主动攻击
+    - `flyer` 游魂：**飞行**，无重力、垂直正弦起伏、撞墙掉头，生成时抬升悬浮；无主动攻击（漂浮接触型威胁）
+    - `charger` 冲锋兽：地面冲锋 —— 玩家进入视野 -> **前摇蓄力**（停下蓄势、可被躲开）-> 高速冲锋 -> **后摇硬直**
+    - `shooter` 巫妖：地面远程 —— 玩家进入射程 -> **前摇蓄光并持续瞄准** -> 发射能量弹（`game/entities/enemyBolt.js`）-> **后摇僵直**
+    - `jumper` 跳跳蛛：地面扑击 —— 玩家进入射程 -> **蹲伏前摇** -> 起跳扑向前方 -> **落地后摇**
+    - `ceiling` 吊诡（**贴天花板**）：生成时自动向上吸附到实心/单向平台底部；玩家经过**正下方** -> **抖动前摇** -> 坠落砸击 -> **爬回天花板**
+    - `diver` 恶鸦（**飞行俯冲**）：空中漂浮 -> 玩家进入范围 -> **悬停前摇并持续锁定方向** -> 朝玩家俯冲 -> **拉升后摇**
+    - 未指定的数值回落到 `constants.ENEMY`；新增一种怪只需在 `ENEMY_TYPES` 加一条并在关卡 `LEVEL1_ENEMY_TYPES` 里引用
+  - **主动攻击机制（与怪物强绑定）**：所有会攻击的怪共用一个四段状态机 `idle → windup(前摇) → active(生效) → recovery(后摇)`，但**每段的实际效果由该类型的行为分支独占实现**，参数（range/vRange/windup/active/recovery/cooldown + 机制专属 dashSpeed/proj*/hopSpeed*/dropSpeed/diveSpeed）全部写在该类型的 `attack` 块里。**触发方式统一为「玩家进入攻击范围即发动」**（`enemy._inRange`）；**前摇/后摇都刻意加长**：前摇给玩家反应窗口规避、后摇是安全输出窗口
+  - `game/world.js` 命中结算：玩家攻击盒 × 敌人受击盒（**每刀对每个敌人只结算一次**，按挥砍 id 判定）+ 弱点倍率 + 命中顿帧 + 敌人接触伤害 + **远程弹 × 玩家**（`enemyBolts`，经防御减伤）
+  - 关卡字符 `E` 标记敌人出生点（`config/level1.js`），类型由 `LEVEL1_ENEMY_TYPES` 按出生顺序一一对应
   - **战斗飘字（伤害数字）**：命中瞬间弹出并**抛物线跳动 + 逐步淡出**（`game/entities/damageText.js`）——**白色 = 对怪物的伤害**、**红色 = 己方受到的伤害**（含接触与尖刺）；数值取实际结算后的伤害，`world.spawnDamageText()` / `spawnPlayerDamage()` 生成
 - **属性与能力系统（成长骨架）**
   - `game/stats.js` 属性计算管线：`base(等级) → 装备 flat → buff mul → 取整`；**只缓存派生结果，来源变化才重算**
@@ -106,9 +115,9 @@ minigame-castle/
 │   │   ├── damage.js            伤害机制表
 │   │   ├── elements.js          元素 / 攻击类型 / 弱点结算
 │   │   ├── buffs.js             限时增益
-│   │   ├── entities/            entity.js / player.js / enemy.js / projectile.js / damageText.js
+│   │   ├── entities/            entity.js / player.js / enemy.js / enemyBolt.js / projectile.js / damageText.js
 │   │   └── scenes/              scene.js / loading.js / play.js / inventory.js
-│   └── config/                  constants.js / items.js / level1.js
+│   └── config/                  constants.js / items.js / enemies.js / level1.js
 └── README.md
 ```
 
@@ -144,4 +153,4 @@ w.spawnPlayerDamage(p.cx, p.y, 5);           // 红
 ## 说明
 
 - 当前用**纯色块**渲染（零资源依赖，导入即可跑）。接入美术时把 `tilemap.render` / `player.render` 换成 `renderer.drawSprite(...)`，并给 `Renderer` 补图集切帧即可。
-- 所有手感/物理数值集中在 `js/config/constants.js`，装备/道具在 `js/config/items.js`，元素/攻击类型/弱点倍率在 `js/game/elements.js`，敌人弱点配置在 `js/config/level1.js`，伤害飘字在 `DAMAGE_TEXT`，下蹲高度在 `PLAYER.crouchH`，便于调参。
+- 所有手感/物理数值集中在 `js/config/constants.js`，装备/道具在 `js/config/items.js`，**怪物类型/数值/行为参数在 `js/config/enemies.js`**，元素/攻击类型/弱点倍率在 `js/game/elements.js`，敌人弱点与类型配置在 `js/config/level1.js`，伤害飘字在 `DAMAGE_TEXT`，下蹲高度在 `PLAYER.crouchH`，便于调参。

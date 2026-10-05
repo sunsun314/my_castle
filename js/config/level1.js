@@ -17,7 +17,7 @@ export const LEVEL1 = [
   '................................................',
   '........=====.............=====.................',
   '................................................',
-  '..P.......E................^^^............E.....',
+  '..P.......E.....E..........^^^..E......EE.E..E..',
   '####################....##########...###########',
   '####################....##########...###########',
 ];
@@ -32,4 +32,20 @@ export const LEVEL1_ENEMY_WEAKNESSES = [
   [{ kind: 'attack', value: 'slash' }, { kind: 'element', value: 'fire' }],
   // 第 2 只：雷属性弱点（单弱点）
   [{ kind: 'element', value: 'thunder' }],
+  // 第 3 只（跳跳蛛）：风属性弱点
+  [{ kind: 'element', value: 'wind' }],
+  // 第 4 只（巫妖）：光属性弱点
+  [{ kind: 'element', value: 'light' }],
+  // 第 5 只（游魂）：斩击弱点
+  [{ kind: 'attack', value: 'slash' }],
+  // 第 6 只（吊诡/天花板怪）：重击弱点
+  [{ kind: 'attack', value: 'heavy' }],
+  // 第 7 只（恶鸦/俯冲）：暗属性弱点
+  [{ kind: 'element', value: 'dark' }],
 ];
+
+// 每个敌人出生点（按 enemySpawns 出现顺序）对应的**怪物类型**（见 config/enemies.js）。
+// 与 LEVEL1_ENEMY_WEAKNESSES 一一对应；缺省 'patrol'。
+// 地图第 15 行自左向右：col10 / col16 / col32 / col39 / col40 / col42 / col45。
+//   col39 吊诡吸附在 row10 的单向平台下方（贴天花板）；col45 恶鸦在右侧空中俯冲。
+export const LEVEL1_ENEMY_TYPES = ['patrol', 'charger', 'jumper', 'ceiling', 'shooter', 'flyer', 'diver'];
