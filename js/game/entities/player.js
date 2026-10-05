@@ -288,15 +288,22 @@ export default class Player extends Entity {
       this.jumpBufferBig = input.up;
     }
     if (!dashing && !meleeActive && !this.crouching && this.jumpBuffer > 0) {
+      // 「大跳」判定（上+跳）：需能力 + 魔力足够。
+      // 空中也能触发，且不与「空中跳次数」挂钩（不消耗、也不受其限制）。
+      const big = this.jumpBufferBig && this.abilities.bigJump
+        && (PLAYER.bigJumpMp <= 0 || this.mp >= PLAYER.bigJumpMp);
       if (this.coyote > 0) {
-        // 地面/土狼时间：普通跳 或 大跳（需能力 + 魔力足够）
-        const canBig = this.jumpBufferBig && this.abilities.bigJump
-          && (PLAYER.bigJumpMp <= 0 || this.mp >= PLAYER.bigJumpMp);
-        if (canBig && PLAYER.bigJumpMp > 0) this.mp -= PLAYER.bigJumpMp;
-        this._doJump(canBig ? PLAYER.bigJumpMul : 1, !canBig);
+        // 地面/土狼时间：普通跳 或 大跳
+        if (big && PLAYER.bigJumpMp > 0) this.mp -= PLAYER.bigJumpMp;
+        this._doJump(big ? PLAYER.bigJumpMul : 1, !big);
+        this.jumpBuffer = 0;
+      } else if (big) {
+        // 空中大跳：不受空中跳次数限制、也不消耗它（仅受能力 + 魔力约束）
+        if (PLAYER.bigJumpMp > 0) this.mp -= PLAYER.bigJumpMp;
+        this._doJump(PLAYER.bigJumpMul, false);
         this.jumpBuffer = 0;
       } else if (this.abilities.doubleJump && this.airJumpsLeft > 0) {
-        // 空中二段跳（大跳不在此触发，避免能力叠加飞出关卡）
+        // 空中二段跳
         this.airJumpsLeft -= 1;
         this._doJump(PLAYER.airJumpMul, true);
         this.jumpBuffer = 0;

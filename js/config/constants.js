@@ -26,7 +26,7 @@ export const PLAYER = {
   dropThroughSpeed: 40,  // 下蹲跳下穿的初始向下速度（脱离平台）
 
   // ---- 能力：跳跃变体 ----
-  bigJumpMul: 1.6,   // 大跳（上+跳）相对普通跳的初速度倍率
+  bigJumpMul: 2.0,   // 大跳（上+跳）相对普通跳的初速度倍率（越大跳得越高越快）
   airJumpMul: 1.0,   // 二段跳相对普通跳的初速度倍率
   bigJumpMp: 0,      // 大跳消耗魔力（0 = 免费）
 
