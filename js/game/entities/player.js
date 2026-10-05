@@ -1,5 +1,5 @@
 import Entity from './entity';
-import { GRAVITY, MAX_FALL, PLAYER, MAGIC, PROGRESSION, COLORS } from '../../config/constants';
+import { GRAVITY, MAX_FALL, PLAYER, MAGIC, TRANSFORM, PROGRESSION, COLORS } from '../../config/constants';
 import { computeStats } from '../stats';
 import { resolveDamage, DamageKind } from '../damage';
 import BuffList from '../buffs';
@@ -13,6 +13,8 @@ export const PlayerState = {
   FALL: 'fall',
   ATTACK: 'attack',
   CROUCH: 'crouch',
+  DEMON: 'demon',   // 魔法魔神形态
+  DASH: 'dash',     // 突进魔神形态
   HURT: 'hurt',
   DEAD: 'dead',
 };
@@ -26,7 +28,7 @@ export default class Player extends Entity {
     // ---- 属性来源（基础值由等级推导；结果只做缓存）----
     this.level = 1;
     this.exp = 0;
-    this.abilities = { doubleJump: true, bigJump: true, magic: true, dash: false };
+    this.abilities = { doubleJump: true, bigJump: true, magic: true, transform: true, dash: false };
     this.equipment = { weapon: null, armor: null, ring: null, subweapon: null };
     this.inventory = [];        // 背包：拥有但未装备的物品
     this.buffs = new BuffList();
@@ -54,6 +56,14 @@ export default class Player extends Entity {
     this.magicCd = 0;           // 副武器施法冷却
     this.invuln = 0;            // 剩余无敌时间
     this.lastDamageApplied = 0; // 最近一次实际扣减量（供伤害飘字读取）
+
+    // ---- 变身（魔神）----
+    this.demonMode = null;      // null | 'mage'（上+变身）| 'dash'（长按突进）
+    this.demonCd = 0;           // 变身冷却
+    this.demonDashTimer = 0;    // 突进剩余时间
+    this.demonInvuln = false;   // 突进中无敌
+    this.dashId = 0;            // 突进序号（同一突进对同一敌人只结算一次）
+    this._transformHold = 0;    // 变身键按住时长（长按判定）
   }
 
   // ================= 属性系统 =================
@@ -78,6 +88,28 @@ export default class Player extends Entity {
     this.stats = computeStats(base, this.equipment, this.buffs.list);
     if (Number.isFinite(this.hp)) this.hp = Math.min(this.hp, this.stats.maxHp);
     if (Number.isFinite(this.mp)) this.mp = Math.min(this.mp, this.stats.maxMp);
+  }
+
+  /**
+   * 对比预览：返回「把该物品装上 / 使用后」的最终属性，**不改变任何状态**。
+   * 装备：把物品放进它自己的槽位（同栏已有则视为替换）后再算一次；
+   * 增益药水：若该 buff 已在生效则视为刷新（属性不变），否则临时加一份再算。
+   * 返回 null 表示该物品不产生属性影响。
+   */
+  previewStats(item) {
+    if (!item) return null;
+    const base = this._baseForLevel(this.level);
+    if (item.slot) {
+      const equipment = Object.assign({}, this.equipment);
+      equipment[item.slot] = item;
+      return computeStats(base, equipment, this.buffs.list);
+    }
+    if (item.type === 'buff') {
+      const active = this.buffs.list.some((b) => b.id === item.id);
+      const buffs = active ? this.buffs.list : this.buffs.list.concat([{ flat: item.flat, mul: item.mul }]);
+      return computeStats(base, this.equipment, buffs);
+    }
+    return null;
   }
 
   // ================= 背包与装备 =================
@@ -184,6 +216,7 @@ export default class Player extends Entity {
     if (this.attackTimer > 0) this.attackTimer -= dt;
     if (this.magicCd > 0) this.magicCd -= dt;
     if (this.dropThrough > 0) this.dropThrough -= dt;
+    if (this.demonCd > 0) this.demonCd -= dt;
     this.jumpBuffer -= dt;
 
     // ---- Buff 倒计时（过期则重算属性）+ 魔力回复 ----
@@ -192,6 +225,16 @@ export default class Player extends Entity {
     if (this.stats.maxMp > 0 && this.mp < this.stats.maxMp) {
       this.mp = Math.min(this.stats.maxMp, this.mp + PLAYER.mpRegen * dt);
     }
+
+    // ---- 变身（魔神）：形态持续耗蓝 / 突进计时 / 输入判定 ----
+    if (this.demonMode === 'mage') {
+      this.mp -= TRANSFORM.drain * dt;
+      if (this.mp <= 0) { this.mp = 0; this._endDemon(); }
+    } else if (this.demonMode === 'dash') {
+      this.demonDashTimer -= dt;
+      if (this.demonDashTimer <= 0) this._endDemon();
+    }
+    this._updateTransform(dt, input);
 
     // ---- 落地/离地：土狼时间、二段跳次数、可变跳截断 ----
     if (this.onGround) {
@@ -220,24 +263,31 @@ export default class Player extends Entity {
     }
 
     // ---- 水平输入（生效时间内忽略移动输入，攻击不可被移动取消）----
-    const ax = meleeActive ? 0 : input.axisX;
-    const control = this.onGround ? 1 : AIR_INPUT;
-    if (Math.abs(ax) > 0.01) {
-      this.vx = ax * PLAYER.moveSpeed;
-      this.facing = ax > 0 ? 1 : -1;
+    const dashing = this.demonMode === 'dash';
+    if (dashing) {
+      // 突进魔神：锁定朝向、持续向前猛冲（撞墙仍由 moveX 处理）
+      this.vx = this.facing * TRANSFORM.dashSpeed;
+      this.vy = 0;
     } else {
-      const drop = PLAYER.friction * control * dt;
-      if (this.vx > 0) this.vx = Math.max(0, this.vx - drop);
-      else if (this.vx < 0) this.vx = Math.min(0, this.vx + drop);
+      const ax = meleeActive ? 0 : input.axisX;
+      const control = this.onGround ? 1 : AIR_INPUT;
+      if (Math.abs(ax) > 0.01) {
+        this.vx = ax * PLAYER.moveSpeed;
+        this.facing = ax > 0 ? 1 : -1;
+      } else {
+        const drop = PLAYER.friction * control * dt;
+        if (this.vx > 0) this.vx = Math.max(0, this.vx - drop);
+        else if (this.vx < 0) this.vx = Math.min(0, this.vx + drop);
+      }
     }
 
     // ---- 跳跃：按下瞬间采样「是否上+跳」（大跳变体）----
     // 生效时间内跳跃被锁定：不采样、不执行（已有缓冲也不消耗）；下蹲时也不能跳。
-    if (!meleeActive && !this.crouching && input.pressed('jump')) {
+    if (!dashing && !meleeActive && !this.crouching && input.pressed('jump')) {
       this.jumpBuffer = PLAYER.jumpBuffer;
       this.jumpBufferBig = input.up;
     }
-    if (!meleeActive && !this.crouching && this.jumpBuffer > 0) {
+    if (!dashing && !meleeActive && !this.crouching && this.jumpBuffer > 0) {
       if (this.coyote > 0) {
         // 地面/土狼时间：普通跳 或 大跳（需能力 + 魔力足够）
         const canBig = this.jumpBufferBig && this.abilities.bigJump
@@ -253,15 +303,15 @@ export default class Player extends Entity {
       }
     }
 
-    // 上升中松开跳跃键 -> 额外重力（大跳不截断）
+    // 上升中松开跳跃键 -> 额外重力（大跳不截断）；突进期间不受重力
     const jumpHeld = input.down('jump');
-    let gravity = GRAVITY;
-    if (this._jumpCut && !jumpHeld && this.vy < 0) gravity *= PLAYER.jumpCut;
+    let gravity = dashing ? 0 : GRAVITY;
+    if (!dashing && this._jumpCut && !jumpHeld && this.vy < 0) gravity *= PLAYER.jumpCut;
 
     // ---- 攻击：B = 近战；上+B = 副武器魔法（消耗 MP，伤害走 mag）----
     // 副武器可在近战「生效时间」内打断并取消其判定；反向（近战打断魔法）不允许。
     // 下蹲不影响攻击：仍可发动普通攻击（攻击盒会随身体一起下沉）。
-    if (input.pressed('attack')) {
+    if (!dashing && input.pressed('attack')) {
       const magicProf = this.getMagicProfile();
       const wantMagic = input.up && this.abilities.magic
         && this.magicCd <= 0 && this.mp >= magicProf.cost;
@@ -287,7 +337,7 @@ export default class Player extends Entity {
 
     // ---- 危险判定 ----
     // 尖刺：固定扣减最大生命的百分比（无视防御），受无敌帧保护
-    if (this.invuln <= 0 && this._touchingHazard(map)) {
+    if (!this.isInvincible() && this._touchingHazard(map)) {
       const hx = this.cx, hy = this.y;
       if (this.hurtBySpike()) world.spawnPlayerDamage(hx, hy, this.lastDamageApplied);
     }
@@ -363,9 +413,96 @@ export default class Player extends Entity {
     this._jumpCut = cut;
   }
 
+  // ================= 变身（魔神）=================
+
+  /**
+   * 变身输入：
+   *  - 上 + 变身（按下瞬间）：立即进入魔法魔神；
+   *  - 长按变身（超过 holdTime）：进入突进魔神。
+   * 两种形态互斥，需冷却结束且魔力足够。
+   */
+  _updateTransform(dt, input) {
+    const held = input.down('transform');
+    if (!this.abilities.transform || this.demonMode !== null) {
+      if (!held) this._transformHold = 0;
+      return;
+    }
+    if (input.pressed('transform')) {
+      this._transformHold = 0;
+      if (input.up && this.demonCd <= 0 && this.mp >= TRANSFORM.cost) {
+        this._startMage();
+        return;
+      }
+    } else if (held) {
+      this._transformHold += dt;
+      if (this._transformHold >= TRANSFORM.holdTime && this.demonCd <= 0 && this.mp >= TRANSFORM.dashCost) {
+        this._startDash();
+        return;
+      }
+    }
+    if (!held) this._transformHold = 0;
+  }
+
+  /** 上 + 变身：魔法魔神（普攻改写为普通攻击、伤害随魔法强度、持续耗蓝） */
+  _startMage() {
+    this.mp -= TRANSFORM.cost;
+    this.demonMode = 'mage';
+    this.demonInvuln = false;
+    this.demonDashTimer = 0;
+    this._standUp();
+    this.attackTimer = 0;
+    this.meleeActive = false;
+  }
+
+  /** 长按变身：突进魔神（锁定朝向前冲、期间无敌、撞怪巨额伤害） */
+  _startDash() {
+    this.mp -= TRANSFORM.dashCost;
+    this.demonMode = 'dash';
+    this.demonDashTimer = TRANSFORM.dashDuration;
+    this.demonInvuln = true;
+    this.dashId += 1;
+    this._standUp();
+    this.attackTimer = 0;
+    this.meleeActive = false;
+    this.vx = this.facing * TRANSFORM.dashSpeed;
+    this.vy = 0;
+  }
+
+  /** 结束魔神形态并进入冷却 */
+  _endDemon() {
+    if (this.demonMode === null) return;
+    this._clearDemon();
+    this.demonCd = TRANSFORM.cooldown;
+  }
+
+  /** 清除魔神形态（不进入冷却，供复活/坠落复位使用） */
+  _clearDemon() {
+    this.demonMode = null;
+    this.demonDashTimer = 0;
+    this.demonInvuln = false;
+    this._transformHold = 0;
+  }
+
+  /** 取消下蹲并恢复站立高度（变身时用，脚底位置不变） */
+  _standUp() {
+    if (!this.crouching) return;
+    this.y -= PLAYER.h - PLAYER.crouchH;
+    this.h = PLAYER.h;
+    this.crouching = false;
+  }
+
+  /** 是否无敌（受击无敌帧 或 突进魔神） */
+  isInvincible() {
+    return this.invuln > 0 || this.demonInvuln;
+  }
+
   _updateState() {
     if (this.hp <= 0) {
       this.state = PlayerState.DEAD;
+    } else if (this.demonMode === 'dash') {
+      this.state = PlayerState.DASH;
+    } else if (this.demonMode === 'mage') {
+      this.state = PlayerState.DEMON;
     } else if (this.invuln > 0) {
       this.state = PlayerState.HURT;
     } else if (this.attackTimer > 0 && this.onGround) {
@@ -400,6 +537,16 @@ export default class Player extends Entity {
    * 装备了带 attack 的武器就用它的；否则回落到空手默认值（PLAYER.attack*）。
    */
   getAttackProfile() {
+    // 魔法魔神形态：普攻改写为「普通」类型，范围/时长走变身参数
+    if (this.demonMode === 'mage') {
+      return {
+        reach: TRANSFORM.attackReach,
+        height: TRANSFORM.attackHeight,
+        duration: TRANSFORM.attackDuration,
+        element: TRANSFORM.element,
+        attackType: TRANSFORM.attackType,
+      };
+    }
     const w = this.equipment.weapon;
     const a = (w && w.attack) || null;
     return {
@@ -410,6 +557,17 @@ export default class Player extends Entity {
       element: w && w.element != null ? w.element : null,
       attackType: w && w.attackType ? w.attackType : PLAYER.attackType,
     };
+  }
+
+  /** 当前普攻伤害：魔法魔神 = 魔法强度 × attackMul；否则 = 攻击力 */
+  getAttackDamage() {
+    if (this.demonMode === 'mage') return Math.round(this.stats.mag * TRANSFORM.attackMul);
+    return this.stats.atk;
+  }
+
+  /** 突进魔神撞怪伤害（巨额，随魔法强度上升） */
+  getDashDamage() {
+    return Math.round(this.stats.mag * TRANSFORM.dashDamageMul);
   }
 
   /**
@@ -466,7 +624,7 @@ export default class Player extends Entity {
    */
   _applyDamage(final, opts = {}) {
     if (final <= 0) return false;
-    if (this.invuln > 0 && !opts.force) return false;
+    if ((this.invuln > 0 || this.demonInvuln) && !opts.force) return false;
 
     this.hp -= final;
     this.lastDamageApplied = final;
@@ -498,6 +656,7 @@ export default class Player extends Entity {
 
   /** 机制③：坠出地图——不扣血，仅复位到出生点（保留当前 HP/MP） */
   fallOut() {
+    this._clearDemon();
     this.crouching = false;
     this.h = PLAYER.h;
     this.x = this.spawnX;
@@ -510,6 +669,7 @@ export default class Player extends Entity {
   }
 
   respawn() {
+    this._clearDemon();
     this.crouching = false;
     this.h = PLAYER.h;
     this.hp = this.stats.maxHp;
@@ -522,10 +682,16 @@ export default class Player extends Entity {
   }
 
   render(renderer) {
-    // 无敌期间闪烁
-    if (this.invuln > 0 && Math.floor(this.invuln * 20) % 2 === 0) return;
+    // 无敌期间闪烁（突进魔神保持可见，不闪烁）
+    if (this.invuln > 0 && !this.demonInvuln && Math.floor(this.invuln * 20) % 2 === 0) return;
 
-    renderer.drawRect(this.x, this.y, this.w, this.h, COLORS.player);
+    // 魔神形态：换色 + 外发光光环
+    const demonColor = this.demonMode === 'dash' ? TRANSFORM.colorDash
+      : (this.demonMode === 'mage' ? TRANSFORM.colorMage : null);
+    if (demonColor) {
+      renderer.drawRect(this.x - 2, this.y - 2, this.w + 4, this.h + 4, demonColor, 0.28);
+    }
+    renderer.drawRect(this.x, this.y, this.w, this.h, demonColor || COLORS.player);
 
     // 朝向标记（眼睛）
     const ex = this.facing > 0 ? this.x + this.w - 6 : this.x + 3;

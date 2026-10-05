@@ -37,6 +37,7 @@ export default class Enemy extends Entity {
     this.facing = this.dir;
     this.hurtTimer = 0;     // 受击硬直（被击退期间不主动移动）
     this.lastHitSwing = -1; // 被哪一次挥砍命中过（保证每刀只结算一次）
+    this.lastHitDash = -1;  // 被哪一次突进命中过（保证每次突进只结算一次）
     this.flash = 0;         // 白闪计时
     this.deadTimer = 0;     // 死亡演出计时
     this.slowTimer = 0;     // 减速剩余时间

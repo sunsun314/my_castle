@@ -1,6 +1,6 @@
 import Camera from '../engine/camera';
 import { DISPLAY } from '../engine/display';
-import { TILE, PLAYER, ENEMY, DAMAGE_TEXT } from '../config/constants';
+import { TILE, PLAYER, ENEMY, TRANSFORM, DAMAGE_TEXT } from '../config/constants';
 import { LEVEL1, LEVEL1_ENEMY_WEAKNESSES } from '../config/level1';
 import Tilemap from './tilemap';
 import Player from './entities/player';
@@ -128,13 +128,32 @@ export default class World {
       for (const e of this.enemies) {
         if (e.dead || e.hp <= 0 || e.lastHitSwing === p.attackId) continue;
         if (this._overlapRect(hb, e)) {
-          const dmg = applyWeakness(p.stats.atk, atkInfo, e.weaknesses);
+          const dmg = applyWeakness(p.getAttackDamage(), atkInfo, e.weaknesses);
           const ex = e.cx, ey = e.y;
           if (e.hurt(dmg, p.cx)) {
             e.lastHitSwing = p.attackId;
             this.hitStop = 0.05;
             this.spawnDamageText(ex, ey, dmg); // 白色：对怪物造成的伤害
             if (e.hp <= 0) p.gainExp(e.exp); // 击杀奖励
+          }
+        }
+      }
+    }
+
+    // 1a) 突进魔神：撞到的怪物受巨额伤害（同一突进对每个敌人只结算一次）
+    if (p.demonMode === 'dash' && p.hp > 0) {
+      const atkInfo = { element: TRANSFORM.element, attackType: TRANSFORM.attackType };
+      const dmg = p.getDashDamage();
+      for (const e of this.enemies) {
+        if (e.dead || e.hp <= 0 || e.lastHitDash === p.dashId) continue;
+        if (this._overlapRect(p, e)) {
+          const ex = e.cx, ey = e.y;
+          const final = applyWeakness(dmg, atkInfo, e.weaknesses);
+          if (e.hurt(final, p.cx)) {
+            e.lastHitDash = p.dashId;
+            this.hitStop = 0.05;
+            this.spawnDamageText(ex, ey, final); // 白色：对怪物造成的伤害
+            if (e.hp <= 0) p.gainExp(e.exp);
           }
         }
       }

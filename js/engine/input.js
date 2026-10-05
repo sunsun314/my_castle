@@ -47,8 +47,11 @@ export default class Input {
     const vw = DISPLAY.viewWidth;
     const vh = DISPLAY.viewHeight;
     this.buttonsDefs = [
+      // 按钮顺序 = 命中优先级：A / B 保持不变，新增的「变身」放在最上方、优先级最低，
+      // 避免大判定半径（r*1.5）下与 A/B 的边界采样相互抢占。
       { name: 'jump', label: 'A', x: vw - 34, y: vh - 36, r: BTN_RADIUS, id: null, down: false },
       { name: 'attack', label: 'B', x: vw - 78, y: vh - 26, r: BTN_RADIUS, id: null, down: false },
+      { name: 'transform', label: '变', x: vw - 34, y: vh - 74, r: BTN_RADIUS, id: null, down: false },
     ];
     this.buttons = {};
     this._prev = {};

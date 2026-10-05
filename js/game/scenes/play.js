@@ -12,12 +12,12 @@ export default class PlayScene extends Scene {
   update(dt) {
     // 顶部中央「背包」按钮：打开装备管理（覆盖层场景会冻结世界、不再结算）
     if (this.app.input.tapIn(this._backpackRect(this.app.renderer))) {
-      this.app.scenes.push(new InventoryScene(this.app, this.world.player, 'gear'));
+      this.app.scenes.push(new InventoryScene(this.app, this.world.player, 'weapon'));
       return;
     }
     // 平行入口：「魔法」按钮 → 直接打开副武器页
     if (this.app.input.tapIn(this._magicRect(this.app.renderer))) {
-      this.app.scenes.push(new InventoryScene(this.app, this.world.player, 'magic'));
+      this.app.scenes.push(new InventoryScene(this.app, this.world.player, 'subweapon'));
       return;
     }
     this.world.update(dt);
@@ -100,6 +100,11 @@ export default class PlayScene extends Scene {
       font: mono,
     });
 
+    // 变身操作提示（上+变 = 魔法魔神；长按变 = 突进）
+    r.drawText('变身：上+变 / 长按突进', r.width - 8, 19, {
+      align: 'right', color: '#c79bff', font: mono,
+    });
+
     // 顶部中央：背包 / 魔法 两个平行按钮（分别打开装备页 / 副武器页）
     this._drawHudButton(r, this._backpackRect(r), '背包');
     this._drawHudButton(r, this._magicRect(r), '魔法');
@@ -142,9 +147,10 @@ export default class PlayScene extends Scene {
 
     // A / B 按钮
     for (const b of input.buttonsDefs) {
-      const isJump = b.name === 'jump';
+      const fill = b.name === 'jump' ? '#4aa3ff'
+        : (b.name === 'transform' ? '#b14cff' : '#ff7043');
       r.drawCircle(b.x, b.y, b.r, {
-        fill: isJump ? '#4aa3ff' : '#ff7043',
+        fill,
         alpha: b.down ? 0.55 : 0.2,
       });
       r.drawCircle(b.x, b.y, b.r, {

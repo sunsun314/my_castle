@@ -68,6 +68,34 @@ export const MAGIC = {
   chainMul: 0.6,    // chain：每跳伤害倍率
 };
 
+// 变身（魔神）：第三个动作按钮，一种新的魔法类型（自身形态变化，而非抛射弹）。
+// 两种交互——
+//  · 上 + 变身：进入「魔法魔神」形态，普通攻击改写为「普通」类型、伤害 = 魔法强度 mag × attackMul，
+//              形态期间持续耗蓝，魔力耗尽自动解除。
+//  · 长按变身：进入「突进魔神」，锁定朝向持续向前猛冲、期间无敌，撞到的怪物受巨额伤害。
+export const TRANSFORM = {
+  // — 上 + 变身（魔法魔神）—
+  cost: 8,             // 启动消耗魔力
+  drain: 6,            // 形态期间每秒耗蓝
+  attackMul: 1.6,      // 普攻伤害 = mag × 该倍率
+  attackReach: 30,     // 普攻范围（改写为普通攻击的手感）
+  attackHeight: 26,
+  attackDuration: 0.18,
+  attackType: 'normal', // 形态期间普攻类型统一为「普通」
+  element: null,        // 无属性
+  colorMage: '#b14cff', // 魔法魔神身体色
+
+  // — 长按（突进魔神）—
+  holdTime: 0.30,      // 长按判定阈值（秒），超过即触发突进
+  dashCost: 8,         // 突进启动消耗魔力
+  dashSpeed: 320,      // 突进水平速度
+  dashDuration: 0.45,  // 突进持续（秒）
+  dashDamageMul: 3.0,  // 突进撞怪伤害 = mag × 该倍率（巨额）
+  colorDash: '#ff3d6e',// 突进魔神身体色
+
+  cooldown: 1.0,       // 变身结束后的再变身冷却
+};
+
 // 经验曲线：升到 level+1 所需经验
 export const PROGRESSION = {
   expBase: 8,  // 1 级升 2 级所需
