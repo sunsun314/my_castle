@@ -8,6 +8,8 @@ import { COLORS } from '../../config/constants';
 export default class PlayScene extends Scene {
   enter() {
     this.world = new World(this.app);
+    // 有存档则续档（本地缓存；无存档 / 读取失败则保持新游戏）
+    this.world.loadGame();
   }
 
   update(dt) {
@@ -117,6 +119,13 @@ export default class PlayScene extends Scene {
     r.drawText('变身：上+变 / 长按突进', r.width - 8, 19, {
       align: 'right', color: '#c79bff', font: mono,
     });
+
+    // 存档成功提示（屏幕中央上方）
+    if (this.world.saveFlash > 0) {
+      r.drawText('已存档', r.width / 2, 28, {
+        align: 'center', color: '#ffe08a', font: '10px sans-serif',
+      });
+    }
 
     // 顶部中央：背包 / 魔法 / 地图 三个平行按钮
     for (const b of this._hudRects(r)) this._drawHudButton(r, b.rect, b.label);

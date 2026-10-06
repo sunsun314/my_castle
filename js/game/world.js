@@ -11,6 +11,8 @@ import { enemyAttackDef } from '../config/enemyAttacks';
 import MagicBolt from './entities/projectile';
 import DamageText from './entities/damageText';
 import { applyWeakness } from './elements';
+import SavePoint from './entities/savePoint';
+import { writeSave, readSave, applySave, eraseSave } from './save';
 
 /**
  * 游戏世界：持有地图、实体集合与相机，并驱动它们的更新、渲染与战斗结算。
@@ -38,6 +40,8 @@ export default class World {
     this.damageTexts = []; // 战斗飘字（伤害数字）
     this.magicFx = [];     // 法术特效（爆裂环 / 连锁电弧）
     this.transition = null; // 房间切换转场 { dir, target, t, dur, swapped }
+    this.savePoint = null;  // 当前房间的存档点（无则为 null）
+    this.saveFlash = 0;     // 存档成功提示剩余时间（供 HUD 显示）
 
     this.loadRoom(roomId, { entry: 'start' });
   }
@@ -56,7 +60,9 @@ export default class World {
 
     this._placePlayer(entry);
     this.enemies = this._spawnEnemies();
+    this.savePoint = this._spawnSavePoint();
     this.entities = [this.player, ...this.enemies];
+    if (this.savePoint) this.entities.push(this.savePoint);
 
     this.projectiles = [];
     this.enemyBolts = [];
@@ -100,6 +106,15 @@ export default class World {
       const y = (e.row + 1) * TILE - h;
       return new Enemy(x, y, { weaknesses: e.weaknesses || [], type });
     });
+  }
+
+  _spawnSavePoint() {
+    const sp = this.room && this.room.savePoint;
+    if (!sp) return null;
+    const w = 14, h = 24;
+    const x = sp.col * TILE + (TILE - w) / 2;
+    const y = (sp.row + 1) * TILE - h;
+    return new SavePoint(x, y);
   }
 
   /** 还活着的敌人数量 */
@@ -187,6 +202,7 @@ export default class World {
     }
 
     this.time += dt;
+    if (this.saveFlash > 0) this.saveFlash -= dt;
     for (const e of this.entities) {
       if (e.active && e.update) e.update(dt, this);
     }
@@ -258,6 +274,25 @@ export default class World {
     const p = this.transition.t / this.transition.dur;
     return 1 - Math.abs(2 * p - 1);
   }
+
+  // ================= 存档 =================
+
+  /** 把当前角色状态写入本地缓存；成功后给玩家一个提示 */
+  saveGame() {
+    const ok = writeSave(this);
+    if (ok) this.saveFlash = 1.6;
+    return ok;
+  }
+
+  /** 读取存档并应用（先按存档房间重建地图，再灌入角色状态）；无存档返回 false */
+  loadGame() {
+    const data = readSave();
+    return data ? applySave(this, data) : false;
+  }
+
+  hasSave() { return !!readSave(); }
+
+  clearSave() { return eraseSave(); }
 
   /** 战斗结算：近战/魔法弹 × 敌人（含弱点倍率）；敌人 × 玩家 */
   _resolveCombat() {

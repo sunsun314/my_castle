@@ -40,6 +40,7 @@ export default class Input {
     // 游戏输入开关：覆盖层菜单（背包/暂停等）打开时置 false，
     // 此时右侧动作按钮与悬浮摇杆都不再消费触点，触点全部进入 taps 供菜单命中。
     this.gameInputEnabled = true;
+    this._prevUp = false; // 上一帧「上」方向（用于 upPressed 边沿触发）
 
     this.layout();
     this._bind();
@@ -185,6 +186,11 @@ export default class Input {
     return Math.abs(this.axisX) <= -this.axisY;
   }
 
+  /** 「上」方向本帧是否刚推入（边沿触发，供存档点等交互使用） */
+  get upPressed() {
+    return this.up && !this._prevUp;
+  }
+
   /**
    * 「下」方向：正下 ±30° 锥形判定（用于下蹲）。
    * 注意：不能命名为 down —— 会与 down(name) 按钮方法重名而覆盖掉。
@@ -212,6 +218,7 @@ export default class Input {
     this.joystick.id = null;
     this.axisX = 0;
     this.axisY = 0;
+    this._prevUp = false;
   }
 
   down(name) {
@@ -241,6 +248,7 @@ export default class Input {
   /** 每帧渲染结束后调用一次 */
   endFrame() {
     for (const b of this.buttonsDefs) this._prev[b.name] = this.buttons[b.name];
+    this._prevUp = this.up;
     this.taps.length = 0;
   }
 }

@@ -6,8 +6,10 @@ import { LEVEL1_ENEMY_TYPES, LEVEL1_ENEMY_WEAKNESSES } from './level1';
  * 设计约定：
  *  - 每个房间是一张**独立的地图**（字符网格），四周（上/下/左/右）全部封墙，
  *    只在左墙、右墙的**贴地位置**各留一个 2 格高的门洞。
- *  - 房间用 left / right 指向相邻房间 id，构成一条「左右连通」的线性链：
+ *  - 房间用 left / right 指向相邻房间 id，构成一条「左右连通」的线性链
+ *    （A 废墟入口 ↔ B 崩坏回廊 ↔ S 篝火营地[存档点] ↔ C 魔王殿）：
  *    从左门出去 = 退回上一间，从右门出去 = 进入下一间。
+ *  - 带 savePoint 字段的房间会放置一座存档石碑（靠近后按「上」保存，见 game/save.js）。
  *  - 玩家的 HP / 装备 / 等级跨房间保留；切房时重建地图与怪，玩家从对侧门内侧进入。
  *
  * 房间内容（敌人、平台、装饰）之后可直接改这里；网格既可用 makeRoom 生成，
@@ -75,15 +77,26 @@ export const ROOMS = [
     id: 'B',
     name: '崩坏回廊',
     left: 'A',
-    right: 'C',
+    right: 'S',
     spawn: { col: 2, row: ROOM_H - 3 },
     grid: makeRoom({ doors: { left: true, right: true }, platforms: [{ col: 6, row: 11, len: 5 }, { col: 20, row: 13, len: 4 }] }),
     enemies: sliceEnemies(3, 7, [10, 18, 26, 34]), // jumper / ceiling / shooter / flyer
   },
   {
+    id: 'S',
+    name: '篝火营地',
+    left: 'B',
+    right: 'C',
+    spawn: { col: 2, row: ROOM_H - 3 },
+    // 存档点：玩家靠近石碑后按「上」即保存角色状态（见 entities/savePoint.js）
+    savePoint: { col: 6, row: ROOM_H - 3 },
+    grid: makeRoom({ doors: { left: true, right: true }, platforms: [{ col: 12, row: 12, len: 5 }, { col: 26, row: 12, len: 5 }] }),
+    enemies: [], // 安全屋：无怪
+  },
+  {
     id: 'C',
     name: '魔王殿',
-    left: 'B',
+    left: 'S',
     right: null,
     spawn: { col: 2, row: ROOM_H - 3 },
     grid: makeRoom({ doors: { left: true }, platforms: [{ col: 12, row: 12, len: 6 }] }),
