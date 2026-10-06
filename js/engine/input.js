@@ -37,6 +37,9 @@ export default class Input {
     };
     this.buttonsDefs = [];
     this.taps = [];      // 本帧未被 A/B 按钮消费的点击（供背包按钮/菜单等 UI 命中）
+    // 游戏输入开关：覆盖层菜单（背包/暂停等）打开时置 false，
+    // 此时右侧动作按钮与悬浮摇杆都不再消费触点，触点全部进入 taps 供菜单命中。
+    this.gameInputEnabled = true;
 
     this.layout();
     this._bind();
@@ -93,7 +96,8 @@ export default class Input {
       const { x, y } = this._toVirtual(t.clientX, t.clientY);
 
       // 1) 优先判定右侧按钮（A/B 属于游戏输入，不算 UI 点击）
-      const b = this._hitButton(x, y);
+      //    菜单覆盖层打开时 gameInputEnabled=false，按钮不消费触点。
+      const b = this.gameInputEnabled ? this._hitButton(x, y) : null;
       if (b && b.id === null) {
         b.id = t.identifier;
         b.down = true;
@@ -103,6 +107,9 @@ export default class Input {
 
       // 2) 其余触点记为「UI 点击」，供背包按钮 / 菜单命中检测
       this.taps.push({ x, y });
+
+      // 菜单模式下不激活摇杆：触点交给菜单 UI
+      if (!this.gameInputEnabled) continue;
 
       // 3) 左半屏按下则激活悬浮摇杆（与 UI 点击按各自矩形独立判定，互不冲突）
       if (this.joystick.active) continue;
@@ -185,6 +192,26 @@ export default class Input {
   get downward() {
     if (this.axisY < DOWN_DEADZONE) return false;
     return Math.abs(this.axisX) <= this.axisY * DOWN_CONE;
+  }
+
+  /**
+   * 切换游戏输入开关（供覆盖层菜单调用）。
+   * 关闭时立即释放所有按住的按钮与摇杆，避免菜单期间残留「按住」状态、
+   * 或关闭菜单后角色因残留方向输入而自行移动。
+   */
+  setGameInputEnabled(enabled) {
+    this.gameInputEnabled = enabled;
+    if (enabled) return;
+    for (const b of this.buttonsDefs) {
+      b.id = null;
+      b.down = false;
+      this.buttons[b.name] = false;
+      this._prev[b.name] = false;
+    }
+    this.joystick.active = false;
+    this.joystick.id = null;
+    this.axisX = 0;
+    this.axisY = 0;
   }
 
   down(name) {

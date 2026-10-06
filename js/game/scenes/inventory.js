@@ -50,11 +50,37 @@ export default class InventoryScene extends Scene {
     this.selected = null; // 当前选中（用于对比预览）的物品
   }
 
+  /**
+   * 进入菜单：关闭游戏输入（动作按钮 / 摇杆）。
+   * 否则右侧「变身」等按钮的大判定半径会抢走右下角「×」关闭按钮的触点，
+   * 导致菜单点不掉（曾出真 bug）。
+   */
+  enter() {
+    this.app.input.setGameInputEnabled(false);
+  }
+
+  /** 退出菜单：恢复游戏输入 */
+  exit() {
+    this.app.input.setGameInputEnabled(true);
+  }
+
   // ---- 布局（update / render 共用，保证「点哪画哪」一致）----
 
-  /** 关闭按钮：右下角（位于 Banner 广告位之上） */
+  /**
+   * 关闭按钮：右下角、位于「变」按钮正上方。
+   * 菜单打开时游戏输入已被屏蔽（见 enter()），关闭按钮不会被动作按钮吞掉；
+   * 位置仍避开「变」按钮的大判定半径（r×1.5），避免命中/视觉上的冲突。
+   */
   _closeRect(r) {
-    return { x: r.width - 30, y: r.height - BANNER_H - 24, w: 22, h: 18 };
+    const w = 24, h = 16;
+    const defs = (this.app && this.app.input && this.app.input.buttonsDefs) || [];
+    const tf = defs.find((b) => b.name === 'transform');
+    if (tf) {
+      // 底部停在「变」按钮判定圆顶部上方 4px
+      const y = Math.max(6, tf.y - tf.r * 1.5 - h - 4);
+      return { x: tf.x - w / 2, y, w, h };
+    }
+    return { x: r.width - 32, y: r.height - 120, w, h };
   }
 
   /** 底部 Banner 广告预留位：整宽贴底 */
