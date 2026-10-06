@@ -31,6 +31,7 @@
 - **背包 / 魔法 / 地图（顶部中央三个平行按钮）**：打开覆盖层「菜单」（全屏覆盖战斗画面，**打开期间世界冻结、不再结算**，点**右下角 ×**（在「变」按钮上方）关闭后恢复；菜单打开期间**跳跃/攻击/变身按钮与摇杆全部被屏蔽**，触点全部交给菜单）。菜单顶部是**按装备栏分类**的页签：**武器 / 防具 / 戒指 / 副武器 / 道具**（由 `ITEM_SLOTS` 驱动，新增槽位自动多一页）。每页左列是该栏的**已装备槽**（点一下卸下）与**对比预览**，右列是背包中**属于该栏的物品**。物品采用**两段式操作**：点一次**选中并显示属性对比**（逐项 `当前→替换后`，绿升红降，`player.previewStats()` 纯计算不改状态），再点同一件才**装备 / 使用**；「道具」页收无槽位物品（药水等）并显示生效中的增益。屏幕最底部预留一条 Banner 广告位（暂未插入广告）。
 - **房间系统（独立地图 + 左右门切换）**：关卡由多张**独立房间地图**组成（`config/rooms.js` 的 `ROOMS`，每间一份字符网格，用 `makeRoom()` 生成——上/下/左/右四面封墙，只在左墙与右墙的**贴地位置**各留 2 格高门洞）。房间用 `left`/`right` 串成一条左右连通的线性链：走到左门 = 退回上一间、走到右门 = 进入下一间。切房时 `World.loadRoom()` 重建瓦片地图与怪物，玩家 HP/装备/等级保留、并从**对侧门内侧**进入，过程中一层黑幕转场（`world.transitionAlpha()`，不透明度峰值恰好盖住换图瞬间）。房间内容（敌人 / 平台）集中在 `rooms.js`，后续可直接填。
 - **存档系统（存档点房间 + 上键交互）**：链上有一间**安全屋「篝火营地」**（`rooms.js` 里带 `savePoint` 字段、无怪），房内一座石碑即存档点（`entities/savePoint.js`）。玩家靠近后**按「上」**（`input.upPressed` 边沿；若同时按住动作按钮则视为上+A/上+B 组合、不触发）即保存——`World.saveGame()` 把快照写入**本地缓存单 key**（完全免费，见 `engine/storage.js`）。存档只存**来源**（等级/经验/当前 HP·MP/能力/装备与背包的**物品 id**/限时 buff），读档经同一条属性管线 `recomputeStats()` 重算派生值（`game/save.js` 的 `serializePlayer/deserializePlayer` 为**纯数据函数**，物品按 `ITEMS[id]` 还原、未知 id 忽略、版本不符拒绝）。进入游戏时若有存档**自动续档**（`PlayScene.enter() → world.loadGame()`），并回到存档所在房间。
+- **死亡与死亡菜单**：血量归零时**不再自动复活**——`player._die()` 把玩家置为 `dead` 并冻结自身，`World` 检测到 `hp<=0` 后置 `gameOver=true` 并停止推进（`update()` 直接 return），同时 `PlayScene` 压入**死亡菜单** `scenes/death.js`（继承 `scenes/overlay.js`）。菜单压栈后 `SceneManager` 只驱动栈顶，下方战斗世界自动冻结 = **停止一切活动**。菜单自上而下是：**顶部 Banner 广告位** → 「你已阵亡」→ 两个选项 → **底部 Banner 广告位**（上下各一条，基类新增 `drawTopBanner()`/`_topBannerRect()`）。选项：**从头开始** = `world.restartGame()`（全新玩家 + 起始房间；**保留存档**，之后仍可再选「从最近的存档开始」）／**从最近的存档开始** = `world.continueGame()`（读档还原房间与角色；无存档时置灰不可点）。读档经 `deserializePlayer` 顺带清掉 `dead` 状态；死亡视角下状态机 `update()` 也直接 early-return，保证不产生任何位移/计时。
 - **地图菜单**（顶部中央「地图」按钮）：与背包**同源骨架**（`scenes/overlay.js` 覆盖层基类：全屏遮罩 / 屏蔽游戏输入 / 右下角关闭 / 底部 Banner），内容为**世界地图**——把房间按左右顺序横向排布、画出连通线，高亮**当前所在房间**并标出玩家位置。
 
 ## 已实现（对照里程碑）
@@ -126,7 +127,7 @@ minigame-castle/
 │   │   ├── elements.js          元素 / 攻击类型 / 弱点结算
 │   │   ├── buffs.js             限时增益
 │   │   ├── entities/            entity.js / player.js / enemy.js / enemyAttack.js / enemyBolt.js / projectile.js / damageText.js / savePoint.js
-│   │   └── scenes/              scene.js / overlay.js / loading.js / play.js / inventory.js / map.js
+│   │   └── scenes/              scene.js / overlay.js / loading.js / play.js / inventory.js / map.js / death.js
 │   └── config/                  constants.js / items.js / enemies.js / enemyAttacks.js / level1.js / rooms.js
 └── README.md
 ```

@@ -211,6 +211,13 @@ export default class Player extends Entity {
     const input = world.input;
     const map = world.map;
 
+    // 死亡后彻底冻结：不再接受输入 / 物理 / 计时，等待死亡菜单选择
+    if (this.dead) {
+      this.vx = 0;
+      this.vy = 0;
+      return;
+    }
+
     // ---- 计时器 ----
     if (this.invuln > 0) this.invuln -= dt;
     if (this.attackTimer > 0) this.attackTimer -= dt;
@@ -623,6 +630,20 @@ export default class Player extends Entity {
 
   // ================= 受伤（按机制区分扣减规则）=================
 
+  /** 血量归零：进入死亡状态并冻结自身（由世界弹出死亡菜单，不再自动复活） */
+  _die() {
+    this.dead = true;
+    this.state = PlayerState.DEAD;
+    this._clearDemon();
+    this.crouching = false;
+    this.h = PLAYER.h;
+    this.attackTimer = 0;
+    this.meleeActive = false;
+    this.invuln = 0;
+    this.vx = 0;
+    this.vy = 0;
+  }
+
   /**
    * 受击通用处理：无敌帧判定 + 扣血 + 击退。
    * @param {number} final 已经算好的扣减量
@@ -636,7 +657,8 @@ export default class Player extends Entity {
     this.hp -= final;
     this.lastDamageApplied = final;
     if (this.hp <= 0) {
-      this.respawn();
+      this.hp = 0;
+      this._die();
       return true;
     }
     this.invuln = opts.invuln != null ? opts.invuln : PLAYER.invulnTime;
@@ -683,6 +705,7 @@ export default class Player extends Entity {
   }
 
   respawn() {
+    this.dead = false;
     this._clearDemon();
     this.crouching = false;
     this.h = PLAYER.h;

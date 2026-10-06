@@ -67,6 +67,7 @@ export function deserializePlayer(p, d) {
 
   // 落地清掉临时状态，避免读档瞬间带着变身 / 攻击 / 击退
   if (p._clearDemon) p._clearDemon();
+  p.dead = false;
   p.crouching = false;
   p.h = PLAYER.h;
   p.state = 'idle';

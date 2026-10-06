@@ -42,6 +42,7 @@ export default class World {
     this.transition = null; // 房间切换转场 { dir, target, t, dur, swapped }
     this.savePoint = null;  // 当前房间的存档点（无则为 null）
     this.saveFlash = 0;     // 存档成功提示剩余时间（供 HUD 显示）
+    this.gameOver = false;  // 玩家死亡后置 true：冻结世界，等待死亡菜单选择
 
     this.loadRoom(roomId, { entry: 'start' });
   }
@@ -189,6 +190,9 @@ export default class World {
   }
 
   update(dt) {
+    // 死亡结算后世界冻结，等待死亡菜单选择（从头开始 / 从最近存档开始）
+    if (this.gameOver) return;
+
     // 房间切换转场：期间冻结世界，仅推进转场计时
     if (this.transition) {
       this._tickTransition(dt);
@@ -224,6 +228,9 @@ export default class World {
     }
 
     this._resolveCombat();
+
+    // 玩家血量归零 -> 进入死亡：冻结世界，交由场景弹出死亡菜单
+    if (this.player.hp <= 0) { this.gameOver = true; return; }
 
     // 战斗飘字：更新 + 回收失效项
     for (const t of this.damageTexts) t.update(dt);
@@ -293,6 +300,29 @@ export default class World {
   hasSave() { return !!readSave(); }
 
   clearSave() { return eraseSave(); }
+
+  // ================= 死亡 =================
+
+  /** 死亡后「从头开始」：重开新游戏（全新玩家 + 起始房间）；保留存档，故之后仍可「从最近的存档开始」 */
+  restartGame() {
+    this.player = new Player(0, 0);
+    this.gameOver = false;
+    this.hitStop = 0;
+    this.transition = null;
+    this.saveFlash = 0;
+    this.loadRoom(DEFAULT_ROOM, { entry: 'start' });
+    return true;
+  }
+
+  /** 死亡后「从最近的存档开始」：读取存档并还原（无存档返回 false） */
+  continueGame() {
+    if (!this.hasSave()) return false;
+    this.gameOver = false;
+    this.hitStop = 0;
+    this.transition = null;
+    this.saveFlash = 0;
+    return this.loadGame();
+  }
 
   /** 战斗结算：近战/魔法弹 × 敌人（含弱点倍率）；敌人 × 玩家 */
   _resolveCombat() {

@@ -2,6 +2,7 @@ import Scene from './scene';
 import World from '../world';
 import InventoryScene from './inventory';
 import MapScene from './map';
+import DeathScene from './death';
 import { COLORS } from '../../config/constants';
 
 /** 游戏进行场景：编排世界（相机空间）与 UI（屏幕空间） */
@@ -29,6 +30,12 @@ export default class PlayScene extends Scene {
       return;
     }
     this.world.update(dt);
+
+    // 玩家死亡：停止一切活动，弹出死亡菜单（从头开始 / 从最近的存档开始）。
+    // 菜单压栈后 SceneManager 只驱动栈顶，本场景不再被更新，故无需去重标志。
+    if (this.world.gameOver) {
+      this.app.scenes.push(new DeathScene(this.app, this.world));
+    }
   }
 
   /** 顶部中央 HUD 按钮（背包 / 魔法 / 地图）的命中矩形：等宽等距居中（update / render 共用） */

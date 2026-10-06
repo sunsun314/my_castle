@@ -80,7 +80,11 @@ export default class OverlayScene extends Scene {
     });
   }
 
-  /** 画公共关闭按钮（右下角） */
+  /**
+   * 画公共关闭按钮（右下角）。
+   * ⚠️ 子类必须在**画完自己的内容底板之后**再调用本方法——否则底板会把关闭按钮盖住。
+   * （地图菜单曾因此「有按钮但看不见」：先 drawClose 再 _renderMap 铺面板，正好覆盖。）
+   */
   drawClose(r) {
     const cr = this._closeRect(r);
     r.drawRect(cr.x, cr.y, cr.w, cr.h, '#3a3f55');
@@ -88,6 +92,22 @@ export default class OverlayScene extends Scene {
       align: 'center', baseline: 'middle', color: '#ffffff', font: 'bold 13px sans-serif',
     });
     return cr;
+  }
+
+  /** 顶部 Banner 广告预留位：整宽贴顶（死亡菜单等使用） */
+  _topBannerRect(r) {
+    return { x: 0, y: 0, w: r.width, h: BANNER_H };
+  }
+
+  /** 画顶部 Banner 广告预留位 */
+  drawTopBanner(r) {
+    const br = this._topBannerRect(r);
+    r.drawRect(br.x, br.y, br.w, br.h, '#141726');
+    r.drawRect(br.x, br.y + br.h - 1, br.w, 1, '#2a2e3d');
+    r.drawText('广告位（Banner 预留）', br.x + br.w / 2, br.y + br.h / 2, {
+      align: 'center', baseline: 'middle', color: '#3a3f55', font: '8px monospace',
+    });
+    return br;
   }
 
   /** 画公共 Banner 广告预留位（整宽贴底） */

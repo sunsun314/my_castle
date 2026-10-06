@@ -39,11 +39,13 @@ export default class MapScene extends OverlayScene {
     r.drawRect(0, 0, r.width, r.height, '#0e1020');
 
     this.drawTitle(r);
-    this.drawClose(r);
 
     const panel = this._panelRect(r);
     this._renderMap(r, panel);
     this._renderInfo(r, panel);
+
+    // 关闭按钮最后画——地图底板会盖住它，必须放在内容之后
+    this.drawClose(r);
 
     // 底部 Banner 广告预留位（与背包一致）
     this.drawBanner(r);
