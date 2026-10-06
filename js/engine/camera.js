@@ -40,6 +40,20 @@ export default class Camera {
     this.y += (ty - this.y) * k;
   }
 
+  /** 立即把相机对准目标（不做平滑），用于房间切换后直接定位，避免跨房滑动 */
+  snap(target, map) {
+    this.x = this._clamp(
+      target.x + target.w / 2 - this.viewWidth / 2,
+      0,
+      Math.max(0, map.pixelWidth - this.viewWidth)
+    );
+    this.y = this._clamp(
+      target.y + target.h / 2 - this.viewHeight / 2,
+      0,
+      Math.max(0, map.pixelHeight - this.viewHeight)
+    );
+  }
+
   _clamp(v, min, max) {
     return v < min ? min : v > max ? max : v;
   }

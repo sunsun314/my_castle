@@ -1,4 +1,4 @@
-import Scene from './scene';
+import OverlayScene from './overlay';
 import { ELEMENT_LABEL, ATTACK_TYPE_LABEL } from '../elements';
 import { ITEM_SLOTS } from '../../config/items';
 import { STAT_KEYS } from '../stats';
@@ -18,11 +18,8 @@ const CATEGORY_KEYS = CATEGORIES.map((c) => c.key);
 // 旧入口别名（HUD「背包 / 魔法」按钮）
 const TAB_ALIAS = { gear: 'weapon', magic: 'subweapon' };
 
-/**
- * 底部预留的 Banner 广告高度（虚拟像素）。
- * 后续接入广告时，在该矩形区域内创建并定位 wx.createBannerAd 即可。
- */
-export const BANNER_H = 48;
+// 底部 Banner 预留位高度复用 OverlayScene 基类（对外转出，保持既有引用兼容）
+export { BANNER_H } from './overlay';
 
 /**
  * 背包 / 装备管理菜单（覆盖层场景）。
@@ -40,9 +37,9 @@ export const BANNER_H = 48;
  *    点已装备槽卸下；点右下角 × 关闭。
  *  - 屏幕最底部预留一条 Banner 广告位（见 BANNER_H / _bannerRect）。
  */
-export default class InventoryScene extends Scene {
+export default class InventoryScene extends OverlayScene {
   constructor(app, player, tab = 'weapon') {
-    super(app);
+    super(app, '菜单 · 背包 / 装备');
     this.player = player;
     let key = TAB_ALIAS[tab] || tab;
     if (!CATEGORY_KEYS.includes(key)) key = 'weapon';
@@ -50,43 +47,8 @@ export default class InventoryScene extends Scene {
     this.selected = null; // 当前选中（用于对比预览）的物品
   }
 
-  /**
-   * 进入菜单：关闭游戏输入（动作按钮 / 摇杆）。
-   * 否则右侧「变身」等按钮的大判定半径会抢走右下角「×」关闭按钮的触点，
-   * 导致菜单点不掉（曾出真 bug）。
-   */
-  enter() {
-    this.app.input.setGameInputEnabled(false);
-  }
-
-  /** 退出菜单：恢复游戏输入 */
-  exit() {
-    this.app.input.setGameInputEnabled(true);
-  }
-
   // ---- 布局（update / render 共用，保证「点哪画哪」一致）----
-
-  /**
-   * 关闭按钮：右下角、位于「变」按钮正上方。
-   * 菜单打开时游戏输入已被屏蔽（见 enter()），关闭按钮不会被动作按钮吞掉；
-   * 位置仍避开「变」按钮的大判定半径（r×1.5），避免命中/视觉上的冲突。
-   */
-  _closeRect(r) {
-    const w = 24, h = 16;
-    const defs = (this.app && this.app.input && this.app.input.buttonsDefs) || [];
-    const tf = defs.find((b) => b.name === 'transform');
-    if (tf) {
-      // 底部停在「变」按钮判定圆顶部上方 4px
-      const y = Math.max(6, tf.y - tf.r * 1.5 - h - 4);
-      return { x: tf.x - w / 2, y, w, h };
-    }
-    return { x: r.width - 32, y: r.height - 120, w, h };
-  }
-
-  /** 底部 Banner 广告预留位：整宽贴底 */
-  _bannerRect(r) {
-    return { x: 0, y: r.height - BANNER_H, w: r.width, h: BANNER_H };
-  }
+  // 关闭按钮 / Banner 预留位 / 屏蔽游戏输入 / close() 均由 OverlayScene 基类提供
 
   /** 顶部各分类页签的命中矩形 */
   _tabRects(r) {
@@ -166,7 +128,7 @@ export default class InventoryScene extends Scene {
     const input = this.app.input;
     const r = this.app.renderer;
 
-    if (input.tapIn(this._closeRect(r))) { this.close(); return; }
+    if (this.handleCloseInput()) return;
 
     // 分类页签：切换时清空选中
     for (const t of this._tabRects(r)) {
@@ -189,12 +151,6 @@ export default class InventoryScene extends Scene {
     }
   }
 
-  /** 关闭：仅弹出自己，露出下方战斗场景并恢复其 update */
-  close() {
-    const stack = this.app.scenes.scenes;
-    if (stack[stack.length - 1] === this) this.app.scenes.pop();
-  }
-
   // ---- 渲染：全屏不透明覆盖 ----
 
   render(r) {
@@ -202,15 +158,13 @@ export default class InventoryScene extends Scene {
     const mono = '9px monospace';
     const slot = this._curSlot();
     const cur = CATEGORIES.find((c) => c.key === this.tab) || CATEGORIES[0];
-    const contentBottom = r.height - BANNER_H; // 内容区底部（Banner 之上）
+    const contentBottom = this._bannerRect(r).y; // 内容区底部（Banner 之上）
 
     // 全屏不透明底 —— 直接覆盖当前所有战斗元素
     r.drawRect(0, 0, r.width, r.height, '#0e1020');
 
     // 标题
-    r.drawText('菜单 · 背包 / 装备', r.width / 2, 6, {
-      align: 'center', color: '#e6e6e6', font: 'bold 11px sans-serif',
-    });
+    this.drawTitle(r);
 
     // 分类页签：武器 / 防具 / 戒指 / 副武器 / 道具
     for (const t of this._tabRects(r)) {
@@ -223,12 +177,8 @@ export default class InventoryScene extends Scene {
       });
     }
 
-    // 关闭按钮（右下角）
-    const cr = this._closeRect(r);
-    r.drawRect(cr.x, cr.y, cr.w, cr.h, '#3a3f55');
-    r.drawText('×', cr.x + cr.w / 2, cr.y + cr.h / 2, {
-      align: 'center', baseline: 'middle', color: '#ffffff', font: 'bold 13px sans-serif',
-    });
+    // 关闭按钮（右下角，基类提供）
+    this.drawClose(r);
 
     // 左列：当前分类的已装备槽（「道具」页改为显示生效中的增益）
     r.drawText(slot ? `已装备 · ${cur.label}` : '生效中的增益', 10, 40, { color: '#8a8f98', font: mono });
@@ -295,13 +245,8 @@ export default class InventoryScene extends Scene {
       align: 'center', color: '#555b6b', font: '8px monospace',
     });
 
-    // 屏幕最底部：Banner 广告预留位（后续在此 _bannerRect 内创建真实广告）
-    const br = this._bannerRect(r);
-    r.drawRect(br.x, br.y, br.w, br.h, '#141726');
-    r.drawRect(br.x, br.y, br.w, 1, '#2a2e3d'); // 与内容区顶边分隔线
-    r.drawText('广告位（Banner 预留）', br.x + br.w / 2, br.y + br.h / 2, {
-      align: 'center', baseline: 'middle', color: '#3a3f55', font: '8px monospace',
-    });
+    // 屏幕最底部：Banner 广告预留位（基类提供）
+    this.drawBanner(r);
   }
 
   /** 对比预览面板：显示选中物品换上 / 使用后的逐项属性变化（绿升红降） */

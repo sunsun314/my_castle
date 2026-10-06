@@ -1,6 +1,7 @@
 import Scene from './scene';
 import World from '../world';
 import InventoryScene from './inventory';
+import MapScene from './map';
 import { COLORS } from '../../config/constants';
 
 /** 游戏进行场景：编排世界（相机空间）与 UI（屏幕空间） */
@@ -20,23 +21,31 @@ export default class PlayScene extends Scene {
       this.app.scenes.push(new InventoryScene(this.app, this.world.player, 'subweapon'));
       return;
     }
+    // 平行入口：「地图」按钮 → 世界地图覆盖层
+    if (this.app.input.tapIn(this._mapRect(this.app.renderer))) {
+      this.app.scenes.push(new MapScene(this.app, this.world));
+      return;
+    }
     this.world.update(dt);
   }
 
-  /** 顶部中央两个 HUD 按钮（背包 / 魔法）的命中矩形（update / render 共用） */
-  _backpackRect(r) {
-    const w = 44;
-    const h = 16;
-    const gap = 6;
-    const startX = (r.width - (w * 2 + gap)) / 2;
-    return { x: startX, y: 5, w, h };
+  /** 顶部中央 HUD 按钮（背包 / 魔法 / 地图）的命中矩形：等宽等距居中（update / render 共用） */
+  _hudRects(r) {
+    const w = 44, h = 16, gap = 6;
+    const labels = ['背包', '魔法', '地图'];
+    const total = w * labels.length + gap * (labels.length - 1);
+    const startX = (r.width - total) / 2;
+    return labels.map((label, i) => ({ label, rect: { x: startX + i * (w + gap), y: 5, w, h } }));
   }
 
-  /** 「魔法」按钮（与「背包」平行）——直接打开副武器装备页 */
-  _magicRect(r) {
-    const b = this._backpackRect(r);
-    return { x: b.x + b.w + 6, y: b.y, w: b.w, h: b.h };
-  }
+  /** 「背包」按钮——打开装备页 */
+  _backpackRect(r) { return this._hudRects(r)[0].rect; }
+
+  /** 「魔法」按钮——打开副武器装备页 */
+  _magicRect(r) { return this._hudRects(r)[1].rect; }
+
+  /** 「地图」按钮——打开世界地图 */
+  _mapRect(r) { return this._hudRects(r)[2].rect; }
 
   render(r) {
     const cam = this.world.camera;
@@ -47,6 +56,10 @@ export default class PlayScene extends Scene {
     r.drawRect(cam.x - 8, cam.y - 8, r.width + 16, r.height + 16, COLORS.sky);
     this.world.render(r);
     r.popCamera();
+
+    // 房间切换转场：黑幕（不透明度峰值正好盖住切房瞬间）
+    const ta = this.world.transitionAlpha();
+    if (ta > 0) r.drawRect(0, 0, r.width, r.height, '#000000', ta);
 
     // ---- UI 层（屏幕空间，不随相机移动）----
     this._renderHUD(r);
@@ -105,9 +118,8 @@ export default class PlayScene extends Scene {
       align: 'right', color: '#c79bff', font: mono,
     });
 
-    // 顶部中央：背包 / 魔法 两个平行按钮（分别打开装备页 / 副武器页）
-    this._drawHudButton(r, this._backpackRect(r), '背包');
-    this._drawHudButton(r, this._magicRect(r), '魔法');
+    // 顶部中央：背包 / 魔法 / 地图 三个平行按钮
+    for (const b of this._hudRects(r)) this._drawHudButton(r, b.rect, b.label);
   }
 
   _drawHudButton(r, rect, label) {

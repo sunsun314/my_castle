@@ -1,7 +1,7 @@
 import Camera from '../engine/camera';
 import { DISPLAY } from '../engine/display';
 import { TILE, PLAYER, ENEMY, TRANSFORM, DAMAGE_TEXT } from '../config/constants';
-import { LEVEL1, LEVEL1_ENEMY_WEAKNESSES, LEVEL1_ENEMY_TYPES } from '../config/level1';
+import { DEFAULT_ROOM, getRoom } from '../config/rooms';
 import { ENEMY_TYPES } from '../config/enemies';
 import Tilemap from './tilemap';
 import Player from './entities/player';
@@ -17,40 +17,88 @@ import { applyWeakness } from './elements';
  * 场景（PlayScene）只负责编排世界与 UI；世界本身不关心输入来源与渲染后端。
  */
 export default class World {
-  constructor(app) {
+  constructor(app, roomId = DEFAULT_ROOM) {
     this.app = app;
     this.input = app.input;
-    this.map = new Tilemap(LEVEL1);
-
-    this.player = this._spawnPlayer();
-    this.enemies = this._spawnEnemies();
-    this.entities = [this.player, ...this.enemies];
-    this.projectiles = []; // 副武器弹丸（上+B 魔法）
-    this.enemyBolts = [];  // 怪物远程弹
-    this.damageTexts = []; // 战斗飘字（伤害数字）
-    this.magicFx = [];     // 法术特效（爆裂环 / 连锁电弧）
 
     this.camera = new Camera(DISPLAY.viewWidth, DISPLAY.viewHeight);
     this.time = 0;
     this.hitStop = 0; // 命中顿帧（秒），短暂冻结世界以强化打击感
+
+    // 玩家跨房间保留（HP / 装备 / 等级不随切房重置）
+    this.player = new Player(0, 0);
+
+    this.roomId = null;
+    this.room = null;
+    this.map = null;
+    this.enemies = [];
+    this.entities = [this.player];
+    this.projectiles = []; // 副武器弹丸（上+B 魔法）
+    this.enemyBolts = [];  // 怪物远程弹
+    this.damageTexts = []; // 战斗飘字（伤害数字）
+    this.magicFx = [];     // 法术特效（爆裂环 / 连锁电弧）
+    this.transition = null; // 房间切换转场 { dir, target, t, dur, swapped }
+
+    this.loadRoom(roomId, { entry: 'start' });
   }
 
-  _spawnPlayer() {
-    const sx = this.map.spawn.col * TILE + (TILE - PLAYER.w) / 2;
-    const sy = (this.map.spawn.row + 1) * TILE - PLAYER.h;
-    return new Player(sx, sy);
+  /**
+   * 载入一个房间（独立地图）：重建瓦片地图与怪物、摆放玩家、清空临时实体。
+   * @param {string} roomId 房间 id（见 config/rooms.js）
+   * @param {{entry?:'start'|'left'|'right'}} opts entry='left' 表示从该房间左门进入（即向右走过来）
+   */
+  loadRoom(roomId, { entry = 'start' } = {}) {
+    const room = getRoom(roomId);
+    if (!room) return false;
+    this.roomId = room.id;
+    this.room = room;
+    this.map = new Tilemap(room.grid);
+
+    this._placePlayer(entry);
+    this.enemies = this._spawnEnemies();
+    this.entities = [this.player, ...this.enemies];
+
+    this.projectiles = [];
+    this.enemyBolts = [];
+    this.damageTexts = [];
+    this.magicFx = [];
+    this.hitStop = 0;
+
+    // 相机瞬间对准新房间（避免切房时从上一间平滑滑过来）
+    this.camera.snap(this.player, this.map);
+    return true;
+  }
+
+  /** 摆放玩家：按进入方向落脚在对应门内侧；spawn 更新为本房间的重生点 */
+  _placePlayer(entry) {
+    const p = this.player;
+    const ts = TILE;
+    const floorTop = (this.map.height - 2) * ts; // 地面顶面像素
+    let col;
+    if (entry === 'left') col = 1;                        // 从左门进来 → 出现在左侧
+    else if (entry === 'right') col = this.map.width - 2; // 从右门进来 → 出现在右侧
+    else col = this.room.spawn ? this.room.spawn.col : 2;
+
+    p.x = col * ts + (ts - PLAYER.w) / 2;
+    p.y = floorTop - PLAYER.h;
+    p.vx = 0;
+    p.vy = 0;
+    p.onGround = false;
+    p.facing = entry === 'right' ? -1 : 1;
+    p.spawnX = p.x; // 死亡 / 坠落后回到本房间的落脚点
+    p.spawnY = p.y;
   }
 
   _spawnEnemies() {
-    return this.map.enemySpawns.map(({ col, row }, i) => {
-      const type = LEVEL1_ENEMY_TYPES[i] || 'patrol';       // 类型来自关卡配置
+    const list = (this.room && this.room.enemies) || [];
+    return list.map((e) => {
+      const type = e.type || 'patrol';                      // 类型来自房间配置
       const def = ENEMY_TYPES[type] || ENEMY_TYPES.patrol;  // 类型定义（取尺寸）
       const w = def.w || ENEMY.w;
       const h = def.h || ENEMY.h;
-      const x = col * TILE + (TILE - w) / 2;
-      const y = (row + 1) * TILE - h;
-      const weaknesses = LEVEL1_ENEMY_WEAKNESSES[i] || []; // 弱点来自关卡配置
-      return new Enemy(x, y, { weaknesses, type });
+      const x = e.col * TILE + (TILE - w) / 2;
+      const y = (e.row + 1) * TILE - h;
+      return new Enemy(x, y, { weaknesses: e.weaknesses || [], type });
     });
   }
 
@@ -126,6 +174,12 @@ export default class World {
   }
 
   update(dt) {
+    // 房间切换转场：期间冻结世界，仅推进转场计时
+    if (this.transition) {
+      this._tickTransition(dt);
+      return;
+    }
+
     // 命中顿帧：短暂冻结整个世界（飘字也一并冻结，强化打击感）
     if (this.hitStop > 0) {
       this.hitStop -= dt;
@@ -168,6 +222,41 @@ export default class World {
     }
 
     this.camera.follow(this.player, this.map, dt);
+
+    // 到达房间边界门洞 → 切房
+    this._checkDoors();
+  }
+
+  /** 走到房间边界的门洞时触发切房：左门回上一间，右门去下一间 */
+  _checkDoors() {
+    if (this.transition || !this.room) return;
+    const p = this.player;
+    if (this.room.left && p.x <= 0) this._startTransition('left');
+    else if (this.room.right && p.x + p.w >= this.map.pixelWidth) this._startTransition('right');
+  }
+
+  _startTransition(dir) {
+    const target = dir === 'left' ? this.room.left : this.room.right;
+    if (!target || this.transition) return;
+    this.transition = { dir, target, t: 0, dur: 0.5, swapped: false };
+  }
+
+  _tickTransition(dt) {
+    const tr = this.transition;
+    tr.t += dt;
+    if (!tr.swapped && tr.t >= tr.dur / 2) {
+      tr.swapped = true;
+      // 向右走 → 从目标房间的左门进来；向左走 → 从右门进来
+      this.loadRoom(tr.target, { entry: tr.dir === 'left' ? 'right' : 'left' });
+    }
+    if (tr.t >= tr.dur) this.transition = null;
+  }
+
+  /** 转场黑幕不透明度（0→1→0，峰值在切房瞬间），供场景绘制 */
+  transitionAlpha() {
+    if (!this.transition) return 0;
+    const p = this.transition.t / this.transition.dur;
+    return 1 - Math.abs(2 * p - 1);
   }
 
   /** 战斗结算：近战/魔法弹 × 敌人（含弱点倍率）；敌人 × 玩家 */
